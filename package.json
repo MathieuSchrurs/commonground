@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@mapbox/mapbox-sdk": "^0.16.2",
+    "@supabase/supabase-js": "^2.95.3",
     "@turf/turf": "^7.3.4",
     "mapbox-gl": "^3.18.1",
     "next": "16.1.6",
