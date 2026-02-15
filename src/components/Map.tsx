@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { CommuteConstraint } from '@/types/user';
 
@@ -35,6 +34,8 @@ export default function Map({ users, intersection, isochrones, isLoading = false
   useEffect(() => {
     if (!mapContainer.current || map.current || !mapboxToken) return;
 
+    console.log('Initializing map with token:', mapboxToken.substring(0, 20) + '...');
+
     mapboxgl.accessToken = mapboxToken;
 
     map.current = new mapboxgl.Map({
@@ -44,7 +45,17 @@ export default function Map({ users, intersection, isochrones, isLoading = false
       zoom: 3,
     });
 
+    // Add error handling
+    map.current.on('error', (e) => {
+      console.error('Map error:', e);
+    });
+
+    map.current.on('styleimagemissing', (e) => {
+      console.error('Style image missing:', e);
+    });
+
     map.current.on('load', () => {
+      console.log('Map loaded successfully');
       setMapLoaded(true);
     });
 
