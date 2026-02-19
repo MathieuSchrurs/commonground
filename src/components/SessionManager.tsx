@@ -21,19 +21,15 @@ export default function SessionManager({ onCreateSession, onJoinSession, isLoadi
       return;
     }
 
-    // Extract session ID from URL
     let sessionId = sessionUrl.trim();
     
-    // Handle full URLs
     if (sessionId.includes('/session/')) {
       const parts = sessionId.split('/session/');
       sessionId = parts[parts.length - 1];
     }
     
-    // Remove any query params or hashes
     sessionId = sessionId.split('?')[0].split('#')[0];
 
-    // Validate UUID format (basic check)
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(sessionId)) {
       setError('Invalid session URL format');
@@ -52,7 +48,6 @@ export default function SessionManager({ onCreateSession, onJoinSession, isLoadi
         </div>
 
         <div className="space-y-6">
-          {/* Create New Session */}
           <div className="text-center">
             <button
               onClick={onCreateSession}
@@ -75,7 +70,6 @@ export default function SessionManager({ onCreateSession, onJoinSession, isLoadi
             </div>
           </div>
 
-          {/* Join Existing Session */}
           <form onSubmit={handleJoin} className="space-y-4">
             <div>
               <label htmlFor="sessionUrl" className="block text-sm font-medium text-gray-700 mb-2">

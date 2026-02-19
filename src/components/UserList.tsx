@@ -1,6 +1,5 @@
 'use client';
 
-import React from 'react';
 import { CommuteConstraint } from '@/types/user';
 
 interface UserListProps {

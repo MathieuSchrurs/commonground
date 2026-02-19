@@ -1,6 +1,5 @@
 'use client';
 
-import React from 'react';
 import { CommuteConstraint } from '@/types/user';
 
 interface ZoneLegendProps {
@@ -10,14 +9,14 @@ interface ZoneLegendProps {
 }
 
 const COLORS = [
-  '#FF6B6B', // Red
-  '#4ECDC4', // Teal
-  '#45B7D1', // Blue
-  '#96CEB4', // Green
-  '#FFEAA7', // Yellow
-  '#DDA0DD', // Plum
-  '#98D8C8', // Mint
-  '#F7DC6F', // Gold
+  '#FF6B6B',
+  '#4ECDC4', 
+  '#45B7D1', 
+  '#96CEB4', 
+  '#FFEAA7', 
+  '#DDA0DD',
+  '#98D8C8', 
+  '#F7DC6F', 
 ];
 
 const TransportIcon = ({ mode }: { mode: string }) => {

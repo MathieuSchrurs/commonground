@@ -24,7 +24,6 @@ export default function UserInputForm({
   const [transportMode, setTransportMode] = useState<TransportMode>('driving');
   const [error, setError] = useState('');
 
-  // Load user data when editing
   useEffect(() => {
     if (userToEdit) {
       setName(userToEdit.name);
@@ -33,7 +32,6 @@ export default function UserInputForm({
       setTransportMode(userToEdit.transportMode);
       setError('');
     } else {
-      // Reset form when not editing
       setName('');
       setAddress('');
       setMaxMinutes(30);
@@ -56,7 +54,6 @@ export default function UserInputForm({
       return;
     }
 
-    // Geocode the address
     try {
       const response = await fetch('/api/geocode', {
         method: 'POST',
@@ -72,7 +69,6 @@ export default function UserInputForm({
       const geocodeResult = await response.json();
 
       if (userToEdit && onUpdateUser) {
-        // Update existing user
         const updatedUser: CommuteConstraint = {
           ...userToEdit,
           name: name.trim(),
@@ -84,7 +80,6 @@ export default function UserInputForm({
         };
         onUpdateUser(updatedUser);
       } else {
-        // Add new user
         const newUser: CommuteConstraint = {
           id: crypto.randomUUID(),
           name: name.trim(),
@@ -96,7 +91,6 @@ export default function UserInputForm({
         };
         onAddUser(newUser);
         
-        // Reset form after adding
         setName('');
         setAddress('');
         setMaxMinutes(30);
@@ -111,7 +105,6 @@ export default function UserInputForm({
     if (onCancelEdit) {
       onCancelEdit();
     }
-    // Reset form
     setName('');
     setAddress('');
     setMaxMinutes(30);

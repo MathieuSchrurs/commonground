@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface ShareLinkProps {
   sessionId: string;
@@ -8,17 +8,15 @@ interface ShareLinkProps {
 
 export default function ShareLink({ sessionId }: ShareLinkProps) {
   const [copied, setCopied] = useState(false);
+  const [sessionUrl, setSessionUrl] = useState('');
 
-  // Build the full session URL
-  const getSessionUrl = () => {
-    if (typeof window === 'undefined') return '';
-    return `${window.location.origin}/session/${sessionId}`;
-  };
+  useEffect(() => {
+    setSessionUrl(`${window.location.origin}/session/${sessionId}`);
+  }, [sessionId]);
 
   const handleCopy = async () => {
-    const url = getSessionUrl();
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(sessionUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -34,7 +32,7 @@ export default function ShareLink({ sessionId }: ShareLinkProps) {
             Share this session
           </label>
           <div className="text-sm text-blue-600 truncate">
-            {getSessionUrl()}
+            {sessionUrl}
           </div>
         </div>
         <button
