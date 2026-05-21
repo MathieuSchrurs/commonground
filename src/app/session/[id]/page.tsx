@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { supabase } from '@/lib/supabase';
+import { PropertyListing } from '@/scraper/types';
 import UserInputForm from '@/components/UserInputForm';
 import UserList from '@/components/UserList';
 import Map from '@/components/Map';
@@ -43,9 +44,13 @@ export default function SessionPage() {
   const [isochrones, setIsochrones] = useState<Feature<Polygon | MultiPolygon>[]>([]);
   const [intersection, setIntersection] = useState<Feature<Polygon | MultiPolygon> | null>(null);
   const [intersectionArea, setIntersectionArea] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [editingUser, setEditingUser] = useState<CommuteConstraint | null>(null);
+  const [properties, setProperties] = useState<PropertyListing[]>([]);
+  const [isScraping, setIsScraping] = useState(false);
+  const [scrapeError, setScrapeError] = useState('');
+  const [scrapeCompleted, setScrapeCompleted] = useState(false);
 
   // Fetch isochrone for a user
   const fetchIsochrone = useCallback(async (user: CommuteConstraint) => {
@@ -302,6 +307,31 @@ export default function SessionPage() {
     setError('');
   }, []);
 
+  const handleFindProperties = useCallback(async () => {
+    if (!intersection) return;
+    setIsScraping(true);
+    setScrapeError('');
+    setScrapeCompleted(false);
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ polygon: intersection }),
+      });
+      const data = await res.json();
+      console.log('[FindProperties] API response:', data);
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to fetch properties');
+      }
+      setProperties(data.listings ?? []);
+      setScrapeCompleted(true);
+    } catch (err) {
+      setScrapeError(err instanceof Error ? err.message : 'Could not load properties');
+    } finally {
+      setIsScraping(false);
+    }
+  }, [intersection]);
+
   if (error === 'Session not found') {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -363,10 +393,11 @@ export default function SessionPage() {
           {/* Right Side - Map */}
           <div className="lg:col-span-2">
             <div className="bg-white rounded-lg shadow-md p-4 h-[600px]">
-              <Map 
-                users={users} 
-                intersection={intersection} 
+              <Map
+                users={users}
+                intersection={intersection}
                 isochrones={isochrones}
+                properties={properties}
                 isLoading={isLoading}
               />
             </div>
@@ -379,7 +410,42 @@ export default function SessionPage() {
 
             {intersection && (
               <div className="mt-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
-                <strong>Success!</strong> Found a common area of {intersectionArea?.toFixed(2)} km² where everyone can live.
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <span>
+                    <strong>Success!</strong> Found a common area of {intersectionArea?.toFixed(2)} km² where everyone can live.
+                  </span>
+                  <button
+                    onClick={handleFindProperties}
+                    disabled={isScraping}
+                    className="flex items-center gap-2 bg-green-700 hover:bg-green-800 disabled:bg-green-400 text-white text-sm font-semibold px-4 py-2 rounded-md transition-colors whitespace-nowrap"
+                  >
+                    {isScraping ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                        </svg>
+                        Searching...
+                      </>
+                    ) : (
+                      <>🏠 Find Properties in Zone</>
+                    )}
+                  </button>
+                </div>
+                {scrapeCompleted && (
+                  <p className="mt-2 text-sm">
+                    {properties.length > 0
+                      ? <>Found <strong>{properties.length}</strong> propert{properties.length === 1 ? 'y' : 'ies'} for sale in this zone — shown as pins on the map.</>
+                      : <>No properties found in this zone yet. Check the browser console for scraping details.</>
+                    }
+                  </p>
+                )}
+              </div>
+            )}
+
+            {scrapeError && (
+              <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
+                {scrapeError}
               </div>
             )}
           </div>
