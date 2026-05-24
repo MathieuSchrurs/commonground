@@ -1,6 +1,32 @@
 import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
 
+// Immoweb embeds the full listing payload (incl. lat/lng) as a Vue prop on
+// every search-result card. We pull the JSON out of the `:classified="..."`
+// attribute. Shape covers what we read.
+interface ImmowebPayload {
+  id: number;
+  property?: {
+    type?: string;
+    subtype?: string;
+    title?: string;
+    bedroomCount?: number;
+    netHabitableSurface?: number;
+    landSurface?: number;
+    location?: {
+      street?: string;
+      number?: string;
+      locality?: string;
+      postalCode?: string | number;
+      latitude?: number;
+      longitude?: number;
+    };
+  };
+  price?: { mainValue?: number };
+  transaction?: { sale?: { price?: number } };
+  media?: { pictures?: Array<{ mediumUrl?: string; largeUrl?: string }> };
+}
+
 const SEARCH_URL = 'https://www.immoweb.be/en/search/house,villa,bungalow,farmhouse,country-cottage,apartment/for-sale/belgium';
 
 // Headers that closely mimic a real Chrome browser on macOS
@@ -28,124 +54,82 @@ function mapType(type?: string): PropertyListing['property_type'] {
   return 'other';
 }
 
-// Try to extract listings from Immoweb's embedded __NEXT_DATA__ JSON
-function extractFromNextData(html: string): PropertyListing[] | null {
-  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
-  if (!match) return null;
-
-  let nextData: Record<string, unknown>;
-  try {
-    nextData = JSON.parse(match[1]);
-  } catch {
-    console.log('[Immoweb] Failed to parse __NEXT_DATA__ JSON');
-    return null;
-  }
-
-  // Try multiple known paths for the results array
-  const pageProps = (nextData?.props as Record<string, unknown>)?.pageProps as Record<string, unknown>;
-  const results: unknown[] =
-    (pageProps?.searchResult as Record<string, unknown>)?.results as unknown[] ??
-    pageProps?.results as unknown[] ??
-    pageProps?.classifieds as unknown[] ??
-    (pageProps?.data as Record<string, unknown>)?.results as unknown[] ??
-    [];
-
-  if (!Array.isArray(results) || results.length === 0) {
-    console.log('[Immoweb] __NEXT_DATA__ found but no results at expected paths. Keys:', Object.keys(pageProps ?? {}));
-    return null;
-  }
-
-  console.log(`[Immoweb] Extracted ${results.length} results from __NEXT_DATA__`);
-
-  return results.map((item: unknown) => {
-    const r = item as Record<string, unknown>;
-    const property = r.property as Record<string, unknown> ?? {};
-    const loc = (r.property as Record<string, unknown>)?.location as Record<string, unknown>
-      ?? r.property_location as Record<string, unknown>
-      ?? {};
-    const price = r.price as Record<string, unknown> ?? {};
-    const images = r.images as Record<string, unknown>[] ?? [];
-    const id = String(r.id ?? r.classifiedId ?? '');
-    const slug = r.url as string ?? r.slug as string ?? '';
-    const fullUrl = slug.startsWith('http') ? slug : `https://www.immoweb.be${slug}`;
-
-    const street = loc.street as string ?? '';
-    const number = loc.number as string ?? loc.streetNumber as string ?? '';
-    const city = loc.city as string ?? loc.locality as string ?? '';
-    const postal_code = String(loc.postalCode ?? loc.zip ?? '');
-    const addressParts = [street, number].filter(Boolean).join(' ');
-    const address = [addressParts, city].filter(Boolean).join(', ') || undefined;
-
-    return {
-      source: 'immoweb' as const,
-      external_id: id,
-      url: fullUrl || `https://www.immoweb.be/en/classified/${id}`,
-      title: property.title as string ?? undefined,
-      address,
-      city: city || undefined,
-      postal_code: postal_code || undefined,
-      price: (price.mainValue ?? price.price) as number ?? undefined,
-      property_type: mapType(property.type as string ?? property.subtype as string),
-      bedrooms: property.bedroomCount as number ?? undefined,
-      surface_area: (property.netHabitableSurface ?? property.livingArea) as number ?? undefined,
-      land_area: (property as Record<string, unknown>)?.land ? ((property as Record<string, unknown>).land as Record<string, unknown>).surface as number : undefined,
-      image_url: (images[0]?.mediumUrl as string) ?? (images[0]?.url as string) ?? undefined,
-    };
-  }).filter(l => l.external_id);
+// Decode the small set of HTML entities Immoweb uses inside Vue prop attrs.
+// cheerio already decodes `&quot;` when reading via .attr(), so this is for
+// raw-string fallbacks only.
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#039;/g, "'");
 }
 
-// Fallback: parse HTML article cards directly
-function extractFromHtml(html: string): PropertyListing[] {
+// The page renders `<article id="classified_NNNN">` cards. Every card has an
+// `<iw-classified-item-bookmark :classified="{...JSON...}">` child whose JSON
+// payload holds the entire listing — including lat/lng. We parse from there.
+function extractListings(html: string): PropertyListing[] {
   const $ = cheerio.load(html);
   const listings: PropertyListing[] = [];
 
-  // Try JSON-LD structured data first
-  $('script[type="application/ld+json"]').each((_, el) => {
-    try {
-      const data = JSON.parse($(el).html() ?? '');
-      const items = Array.isArray(data) ? data : [data];
-      items.forEach((item: Record<string, unknown>) => {
-        if (item['@type'] === 'Product' || item['@type'] === 'Offer') {
-          const id = String(item.productID ?? item['@id'] ?? '');
-          if (id) {
-            listings.push({
-              source: 'immoweb',
-              external_id: id,
-              url: item.url as string ?? '',
-              title: item.name as string ?? undefined,
-              price: (item.offers as Record<string, unknown>)?.price as number ?? undefined,
-            });
-          }
-        }
-      });
-    } catch { /* skip */ }
-  });
-
-  if (listings.length > 0) return listings;
-
-  // Last resort: article cards
-  $('article[data-classified-id]').each((_, el) => {
+  $('article[id^="classified_"]').each((_, el) => {
     const card = $(el);
-    const id = card.attr('data-classified-id') ?? '';
+    const id = card.attr('id')?.replace(/^classified_/, '') ?? '';
     if (!id) return;
 
-    const anchor = card.find('a[href*="/classified/"]').first();
-    const href = anchor.attr('href') ?? '';
+    // Anchor on the title carries the public URL
+    const href = card.find('a.card__title-link, a[href*="/classified/"]').first().attr('href') ?? '';
     const url = href.startsWith('http') ? href : `https://www.immoweb.be${href}`;
 
-    const priceText = card.find('[class*="price"]').first().text().replace(/[^\d]/g, '');
-    const locality = card.find('[class*="locality"], [class*="location"], [class*="city"]').first().text().trim();
-    const localityMatch = locality.match(/^(\d{4})\s+(.+)$/);
+    // The bookmark element holds the full JSON. cheerio decodes &quot; for us.
+    const raw = card.find('iw-classified-item-bookmark').attr(':classified')
+      ?? card.find('iw-classified-item-bookmark').attr('classified');
+
+    let payload: ImmowebPayload | null = null;
+    if (raw) {
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        // Some Vue serializations leave HTML-encoded payloads — try one decode.
+        try { payload = JSON.parse(decodeEntities(raw)); } catch { /* give up */ }
+      }
+    }
+
+    if (!payload) {
+      // No JSON for this card — keep a stub so we at least know the URL exists.
+      listings.push({
+        source: 'immoweb',
+        external_id: id,
+        url: url || `https://www.immoweb.be/en/classified/${id}`,
+      });
+      return;
+    }
+
+    const loc = payload.property?.location;
+    const street = loc?.street ?? '';
+    const number = loc?.number ?? '';
+    const city = loc?.locality ?? '';
+    const postal = loc?.postalCode != null ? String(loc.postalCode) : undefined;
+    const addressLine = [street, number].filter(Boolean).join(' ').trim();
+    const address = [addressLine, postal && city ? `${postal} ${city}` : city].filter(Boolean).join(', ') || undefined;
 
     listings.push({
       source: 'immoweb',
       external_id: id,
-      url,
-      address: locality || undefined,
-      city: (localityMatch?.[2] ?? locality) || undefined,
-      postal_code: localityMatch?.[1] ?? undefined,
-      price: priceText ? parseInt(priceText, 10) : undefined,
-      image_url: card.find('img').first().attr('src'),
+      url: url || `https://www.immoweb.be/en/classified/${id}`,
+      title: payload.property?.title,
+      address,
+      city: city || undefined,
+      postal_code: postal,
+      latitude: loc?.latitude,
+      longitude: loc?.longitude,
+      price: payload.price?.mainValue ?? payload.transaction?.sale?.price,
+      property_type: mapType(payload.property?.type ?? payload.property?.subtype),
+      bedrooms: payload.property?.bedroomCount,
+      surface_area: payload.property?.netHabitableSurface,
+      land_area: payload.property?.landSurface,
+      image_url: payload.media?.pictures?.[0]?.mediumUrl ?? payload.media?.pictures?.[0]?.largeUrl,
     });
   });
 
@@ -185,15 +169,9 @@ async function fetchPage(pageNum: number, bbox?: [number, number, number, number
     return { listings: [], blocked: true };
   }
 
-  // Try __NEXT_DATA__ first, fall back to HTML parsing
-  const fromNext = extractFromNextData(html);
-  if (fromNext !== null) {
-    return { listings: fromNext, blocked: false };
-  }
-
-  const fromHtml = extractFromHtml(html);
-  console.log(`[Immoweb] HTML fallback found ${fromHtml.length} listings`);
-  return { listings: fromHtml, blocked: false };
+  const listings = extractListings(html);
+  console.log(`[Immoweb] Parsed ${listings.length} listings`);
+  return { listings, blocked: false };
 }
 
 export async function scrapeImmoweb(

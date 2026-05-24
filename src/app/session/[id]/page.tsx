@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { Home, Loader2, RefreshCw } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { supabase } from '@/lib/supabase';
@@ -11,6 +13,7 @@ import UserList from '@/components/UserList';
 import Map from '@/components/Map';
 import ZoneLegend from '@/components/ZoneLegend';
 import ShareLink from '@/components/ShareLink';
+import { Button } from '@/components/ui/button';
 import { computeIntersection, calculateArea } from '@/lib/geo';
 
 // Database user type
@@ -307,7 +310,7 @@ export default function SessionPage() {
     setError('');
   }, []);
 
-  const handleFindProperties = useCallback(async () => {
+  const handleFindProperties = useCallback(async (force = false) => {
     if (!intersection) return;
     setIsScraping(true);
     setScrapeError('');
@@ -316,7 +319,7 @@ export default function SessionPage() {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ polygon: intersection }),
+        body: JSON.stringify({ polygon: intersection, force }),
       });
       const data = await res.json();
       console.log('[FindProperties] API response:', data);
@@ -334,121 +337,127 @@ export default function SessionPage() {
 
   if (error === 'Session not found') {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white rounded-lg shadow-md p-8 max-w-md w-full text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">Session Not Found</h1>
-          <p className="text-gray-600 mb-6">The session you&apos;re looking for doesn&apos;t exist or has been deleted.</p>
-          <button
-            onClick={() => router.push('/')}
-            className="w-full bg-blue-600 text-white py-3 px-4 rounded-md hover:bg-blue-700 transition-colors"
-          >
-            Go Home
-          </button>
+      <div className="min-h-screen bg-background flex items-center justify-center px-6">
+        <div className="max-w-md w-full text-center">
+          <h1 className="text-2xl font-semibold tracking-tight mb-2">Session not found</h1>
+          <p className="text-sm text-muted-foreground mb-8">
+            The session you&apos;re looking for doesn&apos;t exist or has been deleted.
+          </p>
+          <Button onClick={() => router.push('/')}>Go home</Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">CommonGround</h1>
-              <p className="text-sm text-gray-600">Find the perfect place for everyone to live</p>
-            </div>
-            <ShareLink sessionId={sessionId} />
-          </div>
+    <div className="min-h-screen bg-background flex flex-col">
+      <header className="border-b border-border bg-background/80 backdrop-blur">
+        <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+          <Link href="/" className="flex items-center gap-2 group">
+            <div className="h-5 w-5 rounded-md bg-foreground transition-transform group-hover:scale-110" />
+            <span className="text-sm font-medium tracking-tight">CommonGround</span>
+            <span className="text-xs text-muted-foreground font-mono ml-2 hidden sm:inline">
+              {sessionId.slice(0, 8)}
+            </span>
+          </Link>
+          <ShareLink sessionId={sessionId} />
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Sidebar - Forms */}
-          <div className="space-y-6">
-            <UserInputForm 
-              onAddUser={handleAddUser} 
-              onUpdateUser={handleUpdateUser}
-              userToEdit={editingUser}
-              onCancelEdit={handleCancelEdit}
-              isLoading={isLoading} 
-            />
-            <UserList 
-              users={users} 
-              onRemoveUser={handleRemoveUser} 
-              onEditUser={handleEditUser}
-              editingUserId={editingUser?.id}
-              isLoading={isLoading} 
-            />
-            <ZoneLegend 
-              users={users} 
-              intersectionArea={intersectionArea} 
-              hasIntersection={!!intersection} 
-            />
-          </div>
+      <main className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0">
+        <aside className="border-r border-border overflow-y-auto p-4 space-y-4 bg-muted/20 min-h-0">
+          <UserInputForm
+            onAddUser={handleAddUser}
+            onUpdateUser={handleUpdateUser}
+            userToEdit={editingUser}
+            onCancelEdit={handleCancelEdit}
+            isLoading={isLoading}
+          />
+          <UserList
+            users={users}
+            onRemoveUser={handleRemoveUser}
+            onEditUser={handleEditUser}
+            editingUserId={editingUser?.id}
+            isLoading={isLoading}
+          />
+          <ZoneLegend
+            users={users}
+            intersectionArea={intersectionArea}
+            hasIntersection={!!intersection}
+          />
 
-          {/* Right Side - Map */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-lg shadow-md p-4 h-[600px]">
-              <Map
-                users={users}
-                intersection={intersection}
-                isochrones={isochrones}
-                properties={properties}
-                isLoading={isLoading}
-              />
+          {error && error !== 'Session not found' && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 text-destructive text-xs p-3">
+              {error}
             </div>
+          )}
+        </aside>
 
-            {error && error !== 'Session not found' && (
-              <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-                {error}
-              </div>
-            )}
+        <div className="relative h-[calc(100vh-3.5rem)] lg:h-full min-h-0">
+          <Map
+            users={users}
+            intersection={intersection}
+            isochrones={isochrones}
+            properties={properties}
+            isLoading={isLoading}
+          />
 
-            {intersection && (
-              <div className="mt-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <span>
-                    <strong>Success!</strong> Found a common area of {intersectionArea?.toFixed(2)} km² where everyone can live.
-                  </span>
-                  <button
-                    onClick={handleFindProperties}
+          {intersection && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-[calc(100%-2rem)] max-w-xl">
+              <div className="rounded-lg border border-border bg-background/95 backdrop-blur shadow-lg p-3">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                      Common ground found
+                    </div>
+                    <div className="text-sm">
+                      <span className="font-mono tabular-nums font-semibold">
+                        {intersectionArea?.toFixed(2)}
+                      </span>
+                      <span className="text-muted-foreground"> km² overlap</span>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={() => handleFindProperties(properties.length > 0)}
                     disabled={isScraping}
-                    className="flex items-center gap-2 bg-green-700 hover:bg-green-800 disabled:bg-green-400 text-white text-sm font-semibold px-4 py-2 rounded-md transition-colors whitespace-nowrap"
+                    size="sm"
+                    variant={properties.length > 0 ? 'outline' : 'default'}
                   >
                     {isScraping ? (
                       <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                        </svg>
-                        Searching...
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        {properties.length > 0 ? 'Refreshing' : 'Searching'}
+                      </>
+                    ) : properties.length > 0 ? (
+                      <>
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Refresh properties
                       </>
                     ) : (
-                      <>🏠 Find Properties in Zone</>
+                      <>
+                        <Home className="h-3.5 w-3.5" />
+                        Find properties
+                      </>
                     )}
-                  </button>
+                  </Button>
                 </div>
                 {scrapeCompleted && (
-                  <p className="mt-2 text-sm">
-                    {properties.length > 0
-                      ? <>Found <strong>{properties.length}</strong> propert{properties.length === 1 ? 'y' : 'ies'} for sale in this zone — shown as pins on the map.</>
-                      : <>No properties found in this zone yet. Check the browser console for scraping details.</>
-                    }
+                  <p className="text-xs text-muted-foreground mt-2 pt-2 border-t border-border">
+                    {properties.length > 0 ? (
+                      <>Found <span className="font-mono tabular-nums text-foreground font-medium">{properties.length}</span> {properties.length === 1 ? 'property' : 'properties'} for sale — shown as pins on the map.</>
+                    ) : (
+                      <>No properties found in this zone yet.</>
+                    )}
+                  </p>
+                )}
+                {scrapeError && (
+                  <p className="text-xs text-destructive mt-2 pt-2 border-t border-border">
+                    {scrapeError}
                   </p>
                 )}
               </div>
-            )}
-
-            {scrapeError && (
-              <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
-                {scrapeError}
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </main>
     </div>

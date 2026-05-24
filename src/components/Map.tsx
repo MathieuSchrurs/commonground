@@ -1,10 +1,15 @@
 'use client';
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
+import { Eye, Layers, Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { PropertyListing } from '@/scraper/types';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Slider } from '@/components/ui/slider';
+import { Separator } from '@/components/ui/separator';
 
 interface MapProps {
   users: CommuteConstraint[];
@@ -36,6 +41,7 @@ const SOURCE_COLORS: Record<string, string> = {
   immoweb: '#e85c0d',
   zimmo: '#2563eb',
   realo: '#7c3aed',
+  immovlan: '#16a34a',
 };
 
 function formatPrice(price?: number): string {
@@ -47,11 +53,62 @@ export default function Map({ users, intersection, isochrones, properties = [], 
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [sliderValue, setSliderValue] = useState(300);
   const [panelExpanded, setPanelExpanded] = useState(true);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const markerContainersRef = useRef<HTMLDivElement[]>([]);
-  const propertyMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  // Keyed by source:external_id so we can update visibility without recreating
+  // DOM nodes on filter changes. Using a plain object — the component is
+  // already named `Map`, which shadows the global Map constructor inside the
+  // function body.
+  const propertyMarkersRef = useRef<Record<string, { marker: mapboxgl.Marker; listing: PropertyListing }>>({});
+
+  // Filters applied to property pins
+  const [sourceFilter, setSourceFilter] = useState<Record<string, boolean>>({
+    immoweb: true,
+    zimmo: true,
+    realo: true,
+    immovlan: true,
+  });
+  const [priceRange, setPriceRange] = useState<[number, number] | null>(null);
+
+  // Derive price bounds from the listings that actually have a price
+  const priceBounds = useMemo<[number, number] | null>(() => {
+    const prices = properties
+      .map(p => p.price)
+      .filter((p): p is number => typeof p === 'number' && p > 0);
+    if (prices.length === 0) return null;
+    return [Math.min(...prices), Math.max(...prices)];
+  }, [properties]);
+
+  // Reset the price range when the bounds change in a meaningful way.
+  // Critically: we depend on a primitive key built from the bound VALUES, not
+  // the array reference, so a React re-render that produces a new-but-equal
+  // `priceBounds` array (e.g. from toggling an unrelated layer checkbox)
+  // doesn't blow away the user's current filter. We also keep the user's
+  // range if it still fits the bounds.
+  const boundsKey = priceBounds ? `${priceBounds[0]}:${priceBounds[1]}` : '';
+  useEffect(() => {
+    setPriceRange(prev => {
+      if (!priceBounds) return null;
+      if (prev && prev[0] >= priceBounds[0] && prev[1] <= priceBounds[1]) return prev;
+      return [priceBounds[0], priceBounds[1]];
+    });
+    // priceBounds is intentionally not in deps — boundsKey captures its value identity
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boundsKey]);
+
+  const matchesFilters = useCallback((listing: PropertyListing) => {
+    if (sourceFilter[listing.source] === false) return false;
+    if (listing.price != null && priceRange) {
+      if (listing.price < priceRange[0] || listing.price > priceRange[1]) return false;
+    }
+    return true;
+  }, [sourceFilter, priceRange]);
+
+  const visibleCount = useMemo(
+    () => properties.filter(matchesFilters).length,
+    [properties, matchesFilters]
+  );
 
   const getInitialVisibility = useCallback((): LayerVisibility => ({
     markers: users.map(() => true),
@@ -61,6 +118,12 @@ export default function Map({ users, intersection, isochrones, properties = [], 
   }), [users, isochrones]);
 
   const [visibility, setVisibility] = useState<LayerVisibility>(getInitialVisibility);
+
+  // Always-current filter state so the marker-creation effect can apply the
+  // right opacity on new pins without listing filters in its deps (which
+  // would tear down DOM on every slider drag).
+  const filterStateRef = useRef({ sourceFilter, priceRange, visibilityProperties: visibility.properties });
+  filterStateRef.current = { sourceFilter, priceRange, visibilityProperties: visibility.properties };
 
   const prevCounts = useRef({ users: users.length, isochrones: isochrones.length });
 
@@ -72,16 +135,6 @@ export default function Map({ users, intersection, isochrones, properties = [], 
   }, [users.length, isochrones.length, getInitialVisibility]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_PUBLIC_TOKEN;
-
-  const setLayerTransition = useCallback((duration: number) => {
-    if (!map.current) return;
-    if (map.current.getLayer('isochrones-fade')) {
-      map.current.setPaintProperty('isochrones-fade', 'fill-opacity-transition', { duration });
-    }
-    if (map.current.getLayer('intersection-fade')) {
-      map.current.setPaintProperty('intersection-fade', 'fill-opacity-transition', { duration });
-    }
-  }, []);
 
   const toggleMarker = useCallback((index: number) => {
     setVisibility(prev => {
@@ -107,6 +160,10 @@ export default function Map({ users, intersection, isochrones, properties = [], 
     setVisibility(prev => ({ ...prev, properties: !prev.properties }));
   }, []);
 
+  // Show all / Hide all toggle the per-layer visibility flags only. They
+  // deliberately do NOT touch `sourceFilter` or `priceRange` — filters survive
+  // a layer-master toggle, so Show All reveals only the pins that pass the
+  // current filter, not the full 462.
   const fadeAllIn = useCallback(() => {
     setVisibility(prev => ({
       ...prev,
@@ -142,8 +199,8 @@ export default function Map({ users, intersection, isochrones, properties = [], 
           showPointOfInterestLabels: true,
         }
       },
-      center: [-98.5795, 39.8283],
-      zoom: 3,
+      center: [3.7174, 51.0543],
+      zoom: 12,
       pitch: 0,
       bearing: 0,
     });
@@ -272,62 +329,50 @@ export default function Map({ users, intersection, isochrones, properties = [], 
     });
   }, [visibility.markers, mapLoaded]);
 
-  // Render property markers
+  // Render property markers — incremental: only create new markers and remove
+  // ones no longer in the list. Filter visibility is handled separately.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
-    propertyMarkersRef.current.forEach(m => m.remove());
-    propertyMarkersRef.current = [];
+    const wanted = new Set<string>();
+    properties.forEach(l => wanted.add(`${l.source}:${l.external_id}`));
+
+    // Drop markers no longer present
+    for (const key of Object.keys(propertyMarkersRef.current)) {
+      if (!wanted.has(key)) {
+        propertyMarkersRef.current[key].marker.remove();
+        delete propertyMarkersRef.current[key];
+      }
+    }
 
     properties.forEach((listing) => {
+      const key = `${listing.source}:${listing.external_id}`;
+      if (propertyMarkersRef.current[key]) return; // already on map
       if (!listing.latitude || !listing.longitude) return;
 
       const color = SOURCE_COLORS[listing.source] ?? '#6b7280';
 
-      // Outer marker container
+      // Mapbox positions the outer `el` via inline `transform: translate(...)`.
+      // Don't touch its transform — animate a child instead. The dot stays
+      // symmetric so anchor: 'center' lands the coordinate at the visual middle.
       const el = document.createElement('div');
-      el.style.position = 'relative';
+      el.style.width = '14px';
+      el.style.height = '14px';
       el.style.cursor = 'pointer';
-      el.style.transition = 'opacity 300ms ease';
 
-      // House pin
-      const pin = document.createElement('div');
-      pin.style.width = '28px';
-      pin.style.height = '28px';
-      pin.style.borderRadius = '50% 50% 50% 0';
-      pin.style.transform = 'rotate(-45deg)';
-      pin.style.backgroundColor = color;
-      pin.style.border = '2px solid white';
-      pin.style.boxShadow = '0 2px 6px rgba(0,0,0,0.35)';
-      pin.style.display = 'flex';
-      pin.style.alignItems = 'center';
-      pin.style.justifyContent = 'center';
+      const dot = document.createElement('div');
+      dot.style.width = '14px';
+      dot.style.height = '14px';
+      dot.style.borderRadius = '50%';
+      dot.style.backgroundColor = color;
+      dot.style.border = '2px solid white';
+      dot.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)';
+      dot.style.transition = 'transform 150ms ease, opacity 300ms ease';
+      dot.style.transformOrigin = 'center';
+      el.appendChild(dot);
 
-      const icon = document.createElement('span');
-      icon.style.transform = 'rotate(45deg)';
-      icon.style.fontSize = '13px';
-      icon.textContent = '🏠';
-      pin.appendChild(icon);
-      el.appendChild(pin);
-
-      // Price badge above the pin
-      if (listing.price) {
-        const badge = document.createElement('div');
-        badge.style.position = 'absolute';
-        badge.style.bottom = '32px';
-        badge.style.left = '50%';
-        badge.style.transform = 'translateX(-50%)';
-        badge.style.backgroundColor = color;
-        badge.style.color = 'white';
-        badge.style.fontSize = '10px';
-        badge.style.fontWeight = '700';
-        badge.style.padding = '2px 6px';
-        badge.style.borderRadius = '10px';
-        badge.style.whiteSpace = 'nowrap';
-        badge.style.boxShadow = '0 1px 4px rgba(0,0,0,0.25)';
-        badge.textContent = formatPrice(listing.price);
-        el.appendChild(badge);
-      }
+      el.addEventListener('mouseenter', () => { dot.style.transform = 'scale(1.5)'; });
+      el.addEventListener('mouseleave', () => { dot.style.transform = 'scale(1)'; });
 
       const popupHtml = `
         <div style="max-width:220px;font-family:sans-serif;">
@@ -350,29 +395,49 @@ export default function Map({ users, intersection, isochrones, properties = [], 
       if (map.current) {
         const marker = new mapboxgl.Marker(el)
           .setLngLat([Number(listing.longitude), Number(listing.latitude)])
-          .setPopup(new mapboxgl.Popup({ offset: 30, maxWidth: '240px' }).setHTML(popupHtml))
+          .setPopup(new mapboxgl.Popup({ offset: 14, maxWidth: '240px' }).setHTML(popupHtml))
           .addTo(map.current);
-        propertyMarkersRef.current.push(marker);
+        propertyMarkersRef.current[key] = { marker, listing };
+
+        // Apply current filter at creation. We set opacity on the child `dot`
+        // (not `el`) because Mapbox rewrites the outer marker's inline opacity
+        // on zoom/move for its own terrain-occlusion fade — that would wipe
+        // out our filter. `pointer-events` goes on the outer so hidden pins
+        // can't be clicked through.
+        const { sourceFilter: sf, priceRange: pr, visibilityProperties: vp } = filterStateRef.current;
+        const sOk = sf[listing.source] !== false;
+        const pOk = listing.price == null || !pr
+          || (listing.price >= pr[0] && listing.price <= pr[1]);
+        const initiallyVisible = vp && sOk && pOk;
+        dot.style.opacity = initiallyVisible ? '1' : '0';
+        el.style.pointerEvents = initiallyVisible ? 'auto' : 'none';
       }
     });
   }, [properties, mapLoaded]);
 
-  // Toggle property marker visibility
+  // Apply master toggle + filter visibility — runs after creation, and again
+  // whenever any filter changes. Reads always-current state via the ref Map.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
-    propertyMarkersRef.current.forEach((marker) => {
+    for (const key of Object.keys(propertyMarkersRef.current)) {
+      const { marker, listing } = propertyMarkersRef.current[key];
       const el = marker.getElement();
-      if (el) el.style.opacity = visibility.properties ? '1' : '0';
-    });
-  }, [visibility.properties, mapLoaded]);
+      if (!el) continue;
+      // Apply opacity to the inner dot — Mapbox manages the outer element's
+      // opacity for its own terrain-occlusion fade and would override us on
+      // every zoom/pan.
+      const dot = el.firstElementChild as HTMLElement | null;
+      const sourceOk = sourceFilter[listing.source] !== false;
+      const priceOk = listing.price == null || !priceRange
+        || (listing.price >= priceRange[0] && listing.price <= priceRange[1]);
+      const visible = visibility.properties && sourceOk && priceOk;
+      if (dot) dot.style.opacity = visible ? '1' : '0';
+      el.style.pointerEvents = visible ? 'auto' : 'none';
+    }
+  }, [visibility.properties, sourceFilter, priceRange, mapLoaded, properties]);
 
-  // Layer transition duration
-  useEffect(() => {
-    if (!map.current || !mapLoaded) return;
-    setLayerTransition(sliderValue);
-  }, [sliderValue, mapLoaded, setLayerTransition]);
-
-  // Isochrone visibility
+  // Isochrone visibility — toggles per-zone outline layers AND filters the
+  // combined fade/outline-dash layer so only the checked zones contribute.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
@@ -386,11 +451,22 @@ export default function Map({ users, intersection, isochrones, properties = [], 
       }
     });
 
+    // Hide individual zones from the combined layer by index via a Mapbox
+    // expression filter. Without this, the combined layer ignores per-zone
+    // checkboxes and renders every zone whenever ANY zone is enabled.
+    const visibleIdxs = visibility.isochrones
+      .map((v, i) => (v ? i : -1))
+      .filter(i => i !== -1);
+    const filterExpr = ['in', ['get', 'idx'], ['literal', visibleIdxs]] as mapboxgl.FilterSpecification;
+    const anyVisible = visibleIdxs.length > 0;
+
     if (map.current.getLayer('isochrones-fade')) {
-      map.current.setLayoutProperty('isochrones-fade', 'visibility', visibility.isochrones.some(v => v) ? 'visible' : 'none');
+      map.current.setFilter('isochrones-fade', filterExpr);
+      map.current.setLayoutProperty('isochrones-fade', 'visibility', anyVisible ? 'visible' : 'none');
     }
     if (map.current.getLayer('isochrones-outline-dash')) {
-      map.current.setLayoutProperty('isochrones-outline-dash', 'visibility', visibility.isochrones.some(v => v) ? 'visible' : 'none');
+      map.current.setFilter('isochrones-outline-dash', filterExpr);
+      map.current.setLayoutProperty('isochrones-outline-dash', 'visibility', anyVisible ? 'visible' : 'none');
     }
   }, [visibility.isochrones, mapLoaded, isochrones]);
 
@@ -434,9 +510,11 @@ export default function Map({ users, intersection, isochrones, properties = [], 
       map.current?.addLayer({ id: `${sourceId}-outline`, type: 'line', source: sourceId, paint: { 'line-color': color, 'line-width': 2 } });
     });
 
+    // Tag every feature with its zone index so we can selectively hide
+    // individual zones from the combined fade/outline layer below.
     const allIsochroneFeatures = isochrones.map((iso, idx) => ({
       ...iso,
-      properties: { ...iso.properties, color: COLORS[idx % COLORS.length] }
+      properties: { ...iso.properties, color: COLORS[idx % COLORS.length], idx }
     }));
 
     if (allIsochroneFeatures.length > 0) {
@@ -469,150 +547,239 @@ export default function Map({ users, intersection, isochrones, properties = [], 
 
   if (!mapboxToken) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 text-destructive p-4 text-sm">
         Error: Mapbox public token not configured. Please set NEXT_PUBLIC_MAPBOX_PUBLIC_TOKEN in your environment.
       </div>
     );
   }
 
   return (
-    <div className="relative w-full h-full min-h-[500px] rounded-lg overflow-hidden">
+    <div className="relative w-full h-full min-h-[500px] overflow-hidden">
       <div ref={mapContainer} className="w-full h-full" />
 
-      <button
+      <Button
         onClick={() => setPanelExpanded(!panelExpanded)}
-        style={{
-          position: 'absolute', top: 10, left: 10, zIndex: 20,
-          width: '40px', height: '40px', borderRadius: '8px', border: 'none',
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.15)', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '20px', backdropFilter: 'blur(4px)',
-        }}
-        title={panelExpanded ? 'Collapse panel' : 'Show layer controls'}
+        variant="outline"
+        size="icon"
+        className="absolute top-3 left-3 z-20 bg-background/95 backdrop-blur shadow-md"
+        title={panelExpanded ? 'Collapse layers' : 'Show layers'}
       >
-        👁
-      </button>
+        {panelExpanded ? <Eye className="h-4 w-4" /> : <Layers className="h-4 w-4" />}
+      </Button>
 
       {panelExpanded && (
-        <div style={{
-          font: `12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif`,
-          position: 'absolute', width: '240px', top: 10, left: 60, zIndex: 10,
-          maxHeight: 'calc(100% - 20px)', overflowY: 'auto',
-        }}>
-          {/* Layer controls */}
-          <div style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
-            borderRadius: '8px', padding: '12px', marginBottom: '10px',
-            backdropFilter: 'blur(4px)',
-          }}>
-            <h2 style={{ fontSize: '14px', fontWeight: 'bold', lineHeight: '20px', display: 'block', margin: '0 0 12px', color: '#333', borderBottom: '1px solid #eee', paddingBottom: '8px' }}>
-              Layer Controls
-            </h2>
+        <div className="absolute top-3 left-16 z-10 w-64 max-h-[calc(100%-1.5rem)] overflow-y-auto space-y-2">
+          <div className="rounded-lg border border-border bg-background/95 backdrop-blur shadow-md p-3">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold tracking-tight">Layers</h2>
+            </div>
 
             {users.length > 0 && (
-              <>
-                <div style={{ fontSize: '12px', fontWeight: '600', color: '#666', marginBottom: '6px' }}>MARKERS ({users.length})</div>
+              <div className="space-y-1.5">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                  Markers · {users.length}
+                </div>
                 {users.map((user, index) => (
-                  <label key={`marker-${index}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', fontSize: '13px' }}>
-                    <input type="checkbox" checked={visibility.markers[index] ?? true} onChange={() => toggleMarker(index)} style={{ cursor: 'pointer' }} />
-                    <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: COLORS[index % COLORS.length], flexShrink: 0 }} />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</span>
+                  <label
+                    key={`marker-${index}`}
+                    className="flex items-center gap-2 py-1 cursor-pointer text-sm"
+                  >
+                    <Checkbox
+                      checked={visibility.markers[index] ?? true}
+                      onCheckedChange={() => toggleMarker(index)}
+                    />
+                    <span
+                      className="h-3 w-3 rounded-full shrink-0"
+                      style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                    />
+                    <span className="truncate">{user.name}</span>
                   </label>
                 ))}
-              </>
+              </div>
             )}
 
             {isochrones.length > 0 && (
               <>
-                <div style={{ fontSize: '12px', fontWeight: '600', color: '#666', margin: '12px 0 6px', borderTop: '1px solid #eee', paddingTop: '12px' }}>ISOCHRONES ({isochrones.length})</div>
-                {isochrones.map((_, index) => (
-                  <label key={`isochrone-${index}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', fontSize: '13px' }}>
-                    <input type="checkbox" checked={visibility.isochrones[index] ?? true} onChange={() => toggleIsochrone(index)} style={{ cursor: 'pointer' }} />
-                    <span style={{ width: '12px', height: '12px', borderRadius: '2px', backgroundColor: COLORS[index % COLORS.length], flexShrink: 0 }} />
-                    <span>Zone {index + 1}</span>
-                  </label>
-                ))}
+                <Separator className="my-3" />
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                    Zones · {isochrones.length}
+                  </div>
+                  {isochrones.map((_, index) => (
+                    <label
+                      key={`isochrone-${index}`}
+                      className="flex items-center gap-2 py-1 cursor-pointer text-sm"
+                    >
+                      <Checkbox
+                        checked={visibility.isochrones[index] ?? true}
+                        onCheckedChange={() => toggleIsochrone(index)}
+                      />
+                      <span
+                        className="h-3 w-3 rounded-sm shrink-0"
+                        style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                      />
+                      <span>Zone {index + 1}</span>
+                    </label>
+                  ))}
+                </div>
               </>
             )}
 
             {intersection && (
               <>
-                <div style={{ fontSize: '12px', fontWeight: '600', color: '#666', margin: '12px 0 6px', borderTop: '1px solid #eee', paddingTop: '12px' }}>INTERSECTION</div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', fontSize: '13px' }}>
-                  <input type="checkbox" checked={visibility.intersection} onChange={toggleIntersection} style={{ cursor: 'pointer' }} />
-                  <span style={{ width: '12px', height: '12px', borderRadius: '2px', backgroundColor: '#22c55e', flexShrink: 0 }} />
-                  <span>Common Area</span>
-                </label>
+                <Separator className="my-3" />
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                    Intersection
+                  </div>
+                  <label className="flex items-center gap-2 py-1 cursor-pointer text-sm">
+                    <Checkbox
+                      checked={visibility.intersection}
+                      onCheckedChange={toggleIntersection}
+                    />
+                    <span className="h-3 w-3 rounded-sm shrink-0 bg-green-500" />
+                    <span>Common area</span>
+                  </label>
+                </div>
               </>
             )}
 
             {properties.length > 0 && (
               <>
-                <div style={{ fontSize: '12px', fontWeight: '600', color: '#666', margin: '12px 0 6px', borderTop: '1px solid #eee', paddingTop: '12px' }}>PROPERTIES ({properties.length})</div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', fontSize: '13px' }}>
-                  <input type="checkbox" checked={visibility.properties} onChange={toggleProperties} style={{ cursor: 'pointer' }} />
-                  <span style={{ fontSize: '12px' }}>🏠</span>
-                  <span>For Sale</span>
-                </label>
-                <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingLeft: '24px', fontSize: '11px', color: '#888' }}>
-                  {properties.some(p => p.source === 'immoweb') && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: SOURCE_COLORS.immoweb, display: 'inline-block' }} />
-                      Immoweb
-                    </span>
-                  )}
-                  {properties.some(p => p.source === 'zimmo') && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: SOURCE_COLORS.zimmo, display: 'inline-block' }} />
-                      Zimmo
-                    </span>
-                  )}
-                  {properties.some(p => p.source === 'realo') && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: SOURCE_COLORS.realo, display: 'inline-block' }} />
-                      Realo
-                    </span>
+                <Separator className="my-3" />
+                <div className="space-y-2">
+                  <div className="flex items-baseline justify-between">
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                      Properties
+                    </div>
+                    <div className="text-[10px] font-mono tabular-nums text-muted-foreground">
+                      {visibleCount}/{properties.length}
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 py-1 cursor-pointer text-sm">
+                    <Checkbox
+                      checked={visibility.properties}
+                      onCheckedChange={toggleProperties}
+                    />
+                    <span>🏠</span>
+                    <span>For sale</span>
+                  </label>
+
+                  {/* Per-source filter — only render rows for sources actually present */}
+                  <div className="space-y-1 pl-6">
+                    {(['immoweb', 'zimmo', 'realo', 'immovlan'] as const)
+                      .filter(s => properties.some(p => p.source === s))
+                      .map(s => (
+                        <label key={s} className="flex items-center gap-2 cursor-pointer text-xs">
+                          <Checkbox
+                            checked={sourceFilter[s] !== false}
+                            onCheckedChange={(v) =>
+                              setSourceFilter(prev => ({ ...prev, [s]: v === true }))
+                            }
+                          />
+                          <span
+                            className="h-2 w-2 rounded-full shrink-0"
+                            style={{ backgroundColor: SOURCE_COLORS[s] }}
+                          />
+                          <span className="capitalize">{s}</span>
+                        </label>
+                      ))}
+                  </div>
+
+                  {/* Price range — only show if there's a real spread to filter on */}
+                  {priceBounds && priceRange && priceBounds[1] > priceBounds[0] && (
+                    <div className="space-y-2 pt-2 border-t border-border/50">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                        Price range
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2 text-xs">
+                        <input
+                          key={`min-${priceRange[0]}`}
+                          type="text"
+                          inputMode="numeric"
+                          defaultValue={formatPrice(priceRange[0])}
+                          onFocus={(e) => e.currentTarget.select()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                            if (e.key === 'Escape') {
+                              e.currentTarget.value = formatPrice(priceRange[0]);
+                              (e.currentTarget as HTMLInputElement).blur();
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const digits = e.currentTarget.value.replace(/\D/g, '');
+                            const n = parseInt(digits, 10);
+                            if (isNaN(n)) {
+                              e.currentTarget.value = formatPrice(priceRange[0]);
+                              return;
+                            }
+                            const clamped = Math.max(priceBounds[0], Math.min(n, priceRange[1]));
+                            setPriceRange([clamped, priceRange[1]]);
+                          }}
+                          className="font-mono tabular-nums bg-transparent w-24 text-left rounded px-1 py-0.5 hover:bg-muted/60 focus:bg-background focus:ring-1 focus:ring-ring focus:outline-none"
+                        />
+                        <input
+                          key={`max-${priceRange[1]}`}
+                          type="text"
+                          inputMode="numeric"
+                          defaultValue={formatPrice(priceRange[1])}
+                          onFocus={(e) => e.currentTarget.select()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                            if (e.key === 'Escape') {
+                              e.currentTarget.value = formatPrice(priceRange[1]);
+                              (e.currentTarget as HTMLInputElement).blur();
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const digits = e.currentTarget.value.replace(/\D/g, '');
+                            const n = parseInt(digits, 10);
+                            if (isNaN(n)) {
+                              e.currentTarget.value = formatPrice(priceRange[1]);
+                              return;
+                            }
+                            const clamped = Math.min(priceBounds[1], Math.max(n, priceRange[0]));
+                            setPriceRange([priceRange[0], clamped]);
+                          }}
+                          className="font-mono tabular-nums bg-transparent w-24 text-right rounded px-1 py-0.5 hover:bg-muted/60 focus:bg-background focus:ring-1 focus:ring-ring focus:outline-none"
+                        />
+                      </div>
+                      <Slider
+                        min={priceBounds[0]}
+                        max={priceBounds[1]}
+                        step={Math.max(1000, Math.round((priceBounds[1] - priceBounds[0]) / 200))}
+                        value={priceRange}
+                        onValueChange={(v) => {
+                          if (Array.isArray(v) && v.length >= 2) {
+                            setPriceRange([v[0], v[1]]);
+                          }
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
               </>
             )}
           </div>
 
-          {/* Fade controls */}
-          <div style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
-            borderRadius: '8px', padding: '12px', backdropFilter: 'blur(4px)',
-          }}>
-            <div style={{ marginBottom: '10px' }}>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#666', marginBottom: '6px' }}>
-                Fade Duration: {sliderValue}ms
-              </label>
-              <input type="range" min="0" max="1000" step="50" value={sliderValue} onChange={(e) => setSliderValue(parseInt(e.target.value))} style={{ width: '100%', cursor: 'pointer' }} />
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={fadeAllIn} style={{ flex: 1, height: '32px', padding: '6px', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '500', color: '#fff', background: '#22c55e', cursor: 'pointer' }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#16a34a'}
-                onMouseOut={(e) => e.currentTarget.style.background = '#22c55e'}>
-                Show All
-              </button>
-              <button onClick={fadeAllOut} style={{ flex: 1, height: '32px', padding: '6px', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '500', color: '#fff', background: '#ef4444', cursor: 'pointer' }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#dc2626'}
-                onMouseOut={(e) => e.currentTarget.style.background = '#ef4444'}>
-                Hide All
-              </button>
+          <div className="rounded-lg border border-border bg-background/95 backdrop-blur shadow-md p-3">
+            <div className="flex gap-2">
+              <Button onClick={fadeAllIn} size="sm" variant="outline" className="flex-1 h-8 text-xs">
+                Show all
+              </Button>
+              <Button onClick={fadeAllOut} size="sm" variant="outline" className="flex-1 h-8 text-xs">
+                Hide all
+              </Button>
             </div>
           </div>
         </div>
       )}
 
       {isLoading && (
-        <div className="absolute inset-0 bg-black/20 flex items-center justify-center z-30">
-          <div className="bg-white rounded-lg p-4 shadow-lg flex items-center gap-3">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-            <span className="text-gray-700">Loading...</span>
+        <div className="absolute inset-0 bg-background/40 backdrop-blur-[2px] flex items-center justify-center z-30">
+          <div className="rounded-lg border border-border bg-background shadow-lg px-4 py-3 flex items-center gap-3 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <span>Loading…</span>
           </div>
         </div>
       )}

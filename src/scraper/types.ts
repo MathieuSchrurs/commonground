@@ -1,5 +1,5 @@
 export interface PropertyListing {
-  source: 'immoweb' | 'zimmo' | 'realo';
+  source: 'immoweb' | 'zimmo' | 'realo' | 'immovlan';
   external_id: string;
   url: string;
   title?: string;

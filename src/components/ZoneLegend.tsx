@@ -1,6 +1,9 @@
 'use client';
 
+import { AlertTriangle } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 
 interface ZoneLegendProps {
   users: CommuteConstraint[];
@@ -8,89 +11,58 @@ interface ZoneLegendProps {
   hasIntersection: boolean;
 }
 
-const COLORS = [
-  '#FF6B6B',
-  '#4ECDC4', 
-  '#45B7D1', 
-  '#96CEB4', 
-  '#FFEAA7', 
-  '#DDA0DD',
-  '#98D8C8', 
-  '#F7DC6F', 
-];
-
-const TransportIcon = ({ mode }: { mode: string }) => {
-  if (mode === 'driving') {
-    return (
-      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-      </svg>
-    );
-  }
-  return (
-    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-  );
-};
-
 export default function ZoneLegend({ users, intersectionArea, hasIntersection }: ZoneLegendProps) {
-  if (users.length === 0) {
-    return (
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h3 className="text-lg font-semibold mb-2 text-gray-800">Zone Legend</h3>
-        <p className="text-gray-500 text-sm">Add locations to see the legend</p>
-      </div>
-    );
-  }
+  if (users.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
-      <h3 className="text-lg font-semibold mb-4 text-gray-800">Zone Legend</h3>
-      
-      <div className="space-y-3">
-        {users.map((user, index) => (
-          <div key={user.id} className="flex items-center gap-3">
-            <div
-              className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold relative"
-              style={{ backgroundColor: COLORS[index % COLORS.length] }}
-            >
-              {index + 1}
-              <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-white rounded-full flex items-center justify-center shadow-sm">
-                <TransportIcon mode={user.transportMode} />
-              </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Common ground</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {hasIntersection ? (
+          <div>
+            <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
+              Overlap area
             </div>
-            <div className="flex-1">
-              <div className="font-medium text-gray-800">{user.name}</div>
-              <div className="text-xs text-gray-500">{user.maxMinutes} min max • {user.transportMode === 'driving' ? 'Car' : 'Bike'}</div>
+            <div className="font-mono text-2xl font-semibold tabular-nums">
+              {intersectionArea !== null ? intersectionArea.toFixed(2) : '—'}
+              <span className="text-sm text-muted-foreground font-normal ml-1">km²</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              The shaded green zone is where everyone&apos;s commute constraint is satisfied.
+            </p>
+          </div>
+        ) : users.length > 1 ? (
+          <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium">No overlap yet</p>
+              <p className="mt-1 text-amber-800">
+                Try increasing one or more max commute times.
+              </p>
             </div>
           </div>
-        ))}
-      </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Add at least two locations to find shared ground.
+          </p>
+        )}
 
-      {hasIntersection && (
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="flex items-center gap-3">
-            <div className="w-6 h-6 rounded bg-green-500"></div>
-            <div className="flex-1">
-              <div className="font-medium text-gray-800">Common Area</div>
-              <div className="text-xs text-gray-500">
-                {intersectionArea !== null 
-                  ? `${intersectionArea.toFixed(2)} km²`
-                  : 'All users can live here'}
-              </div>
+        {users.length > 0 && (
+          <>
+            <Separator />
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+              Participants
             </div>
-          </div>
-        </div>
-      )}
-
-      {!hasIntersection && users.length > 1 && (
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="text-amber-600 text-sm bg-amber-50 p-2 rounded">
-            ⚠️ No overlapping area found. Try increasing commute times.
-          </div>
-        </div>
-      )}
-    </div>
+            <div className="text-sm text-muted-foreground">
+              <span className="font-mono tabular-nums text-foreground">{users.length}</span>
+              {' '}
+              {users.length === 1 ? 'person' : 'people'}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

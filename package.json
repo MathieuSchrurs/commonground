@@ -12,15 +12,22 @@
     "scrape:zimmo": "tsx src/scraper/index.ts --source zimmo"
   },
   "dependencies": {
+    "@base-ui/react": "^1.5.0",
     "@mapbox/mapbox-sdk": "^0.16.2",
     "@supabase/supabase-js": "^2.95.3",
     "@turf/turf": "^7.3.4",
     "cheerio": "^1.2.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.16.0",
     "mapbox-gl": "^3.18.1",
     "next": "^16.2.4",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-map-gl": "^8.1.0"
+    "react-map-gl": "^8.1.0",
+    "shadcn": "^4.8.0",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

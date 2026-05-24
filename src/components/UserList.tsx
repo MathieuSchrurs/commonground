@@ -1,6 +1,11 @@
 'use client';
 
+import { Car, Bike, Pencil, Trash2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 interface UserListProps {
   users: CommuteConstraint[];
@@ -10,98 +15,79 @@ interface UserListProps {
   isLoading?: boolean;
 }
 
-const TransportIcon = ({ mode }: { mode: string }) => {
-  if (mode === 'driving') {
-    return (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-      </svg>
-    );
-  }
-  return (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-  );
-};
+const ZONE_COLORS = [
+  '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+  '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F',
+];
 
 export default function UserList({ users, onRemoveUser, onEditUser, editingUserId, isLoading = false }: UserListProps) {
-  if (users.length === 0) {
-    return null;
-  }
+  if (users.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
-      <h3 className="text-lg font-semibold mb-4 text-gray-800">Added Locations</h3>
-      
-      <div className="space-y-3">
-        {users.map((user) => (
-          <div
-            key={user.id}
-            className={`flex items-start justify-between p-3 rounded-lg ${
-              editingUserId === user.id 
-                ? 'bg-blue-50 border-2 border-blue-300' 
-                : 'bg-gray-50'
-            }`}
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-800">{user.name}</span>
-                <span 
-                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-700"
-                  title={user.transportMode === 'driving' ? 'Car' : 'Bike'}
-                >
-                  <TransportIcon mode={user.transportMode} />
-                  <span className="ml-1 capitalize">{user.transportMode}</span>
-                </span>
-                {editingUserId === user.id && (
-                  <span className="text-xs text-blue-600 font-medium">Editing...</span>
-                )}
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Locations</CardTitle>
+        <span className="text-xs font-mono tabular-nums text-muted-foreground">
+          {users.length}
+        </span>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {users.map((user, index) => {
+          const isEditing = editingUserId === user.id;
+          const Icon = user.transportMode === 'driving' ? Car : Bike;
+          return (
+            <div
+              key={user.id}
+              className={cn(
+                'group flex items-start gap-3 rounded-md border p-3 transition-colors',
+                isEditing ? 'border-foreground bg-accent/50' : 'border-border hover:bg-accent/30'
+              )}
+            >
+              <div
+                className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                style={{ backgroundColor: ZONE_COLORS[index % ZONE_COLORS.length] }}
+              >
+                {index + 1}
               </div>
-              <div className="text-sm text-gray-600 truncate">{user.address}</div>
-              <div className="text-xs text-gray-500 mt-1">
-                {user.maxMinutes} minute commute
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium truncate">{user.name}</span>
+                  <Badge variant="secondary" className="gap-1 font-normal">
+                    <Icon className="h-3 w-3" />
+                    {user.maxMinutes}m
+                  </Badge>
+                  {isEditing && (
+                    <span className="text-xs text-muted-foreground">editing</span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground truncate mt-0.5">{user.address}</p>
+              </div>
+              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => onEditUser(user)}
+                  disabled={isLoading || isEditing}
+                  aria-label={`Edit ${user.name}`}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-destructive hover:text-destructive"
+                  onClick={() => onRemoveUser(user.id)}
+                  disabled={isLoading}
+                  aria-label={`Remove ${user.name}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => onEditUser(user)}
-                disabled={isLoading || editingUserId === user.id}
-                className="text-blue-600 hover:text-blue-800 disabled:opacity-50 disabled:cursor-not-allowed p-1"
-                aria-label={`Edit ${user.name}`}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                </svg>
-              </button>
-              <button
-                onClick={() => onRemoveUser(user.id)}
-                disabled={isLoading}
-                className="text-red-600 hover:text-red-800 disabled:opacity-50 disabled:cursor-not-allowed p-1"
-                aria-label={`Remove ${user.name}`}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
