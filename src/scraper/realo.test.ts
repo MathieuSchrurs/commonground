@@ -1,0 +1,42 @@
+import { describe, expect, it } from 'vitest';
+import { parseCards, parsePrice } from './realo';
+
+describe('parsePrice', () => {
+  it('parses Belgian dot-separated thousands', () => {
+    expect(parsePrice('€ 1.245.000')).toBe(1245000);
+  });
+
+  it('returns undefined without a euro sign', () => {
+    expect(parsePrice('1.245.000')).toBeUndefined();
+  });
+});
+
+describe('parseCards', () => {
+  it('parses a grid item from its data attributes', () => {
+    const html = `
+      <div>before</div>
+      <div data-scope="componentEstateGridItem" class="component-estate-grid-item house">
+        <a data-href="/en/veldstraat-9000-gent/123456">Veldstraat</a>
+        <span>€ 350.000</span>
+        <span>3 bed</span>
+        <span>120 m²</span>
+      </div>`;
+
+    const [listing] = parseCards(html);
+    expect(listing).toMatchObject({
+      source: 'realo',
+      external_id: '123456',
+      url: 'https://www.realo.be/en/veldstraat-9000-gent/123456',
+      address: 'veldstraat, 9000 gent',
+      city: 'gent',
+      postal_code: '9000',
+      price: 350000,
+      bedrooms: 3,
+      surface_area: 120,
+    });
+  });
+
+  it('returns nothing when no grid items are present', () => {
+    expect(parseCards('<html><body>empty</body></html>')).toEqual([]);
+  });
+});

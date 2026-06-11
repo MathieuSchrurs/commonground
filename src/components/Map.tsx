@@ -49,6 +49,42 @@ function formatPrice(price?: number): string {
   return `€${price.toLocaleString('nl-BE')}`;
 }
 
+// One end of the price-range filter: free-text input that commits a clamped
+// value on blur/Enter and resets to the current value on Escape or bad input.
+function PriceInput({ value, lo, hi, align, onCommit }: {
+  value: number;
+  lo: number;
+  hi: number;
+  align: 'left' | 'right';
+  onCommit: (clamped: number) => void;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      defaultValue={formatPrice(value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          e.currentTarget.value = formatPrice(value);
+          e.currentTarget.blur();
+        }
+      }}
+      onBlur={(e) => {
+        const digits = e.currentTarget.value.replace(/\D/g, '');
+        const n = parseInt(digits, 10);
+        if (isNaN(n)) {
+          e.currentTarget.value = formatPrice(value);
+          return;
+        }
+        onCommit(Math.max(lo, Math.min(n, hi)));
+      }}
+      className={`font-mono tabular-nums bg-transparent w-24 ${align === 'left' ? 'text-left' : 'text-right'} rounded px-1 py-0.5 hover:bg-muted/60 focus:bg-background focus:ring-1 focus:ring-ring focus:outline-none`}
+    />
+  );
+}
+
 export default function Map({ users, intersection, isochrones, properties = [], isLoading = false }: MapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
@@ -693,55 +729,21 @@ export default function Map({ users, intersection, isochrones, properties = [], 
                         Price range
                       </div>
                       <div className="flex items-baseline justify-between gap-2 text-xs">
-                        <input
+                        <PriceInput
                           key={`min-${priceRange[0]}`}
-                          type="text"
-                          inputMode="numeric"
-                          defaultValue={formatPrice(priceRange[0])}
-                          onFocus={(e) => e.currentTarget.select()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
-                            if (e.key === 'Escape') {
-                              e.currentTarget.value = formatPrice(priceRange[0]);
-                              (e.currentTarget as HTMLInputElement).blur();
-                            }
-                          }}
-                          onBlur={(e) => {
-                            const digits = e.currentTarget.value.replace(/\D/g, '');
-                            const n = parseInt(digits, 10);
-                            if (isNaN(n)) {
-                              e.currentTarget.value = formatPrice(priceRange[0]);
-                              return;
-                            }
-                            const clamped = Math.max(priceBounds[0], Math.min(n, priceRange[1]));
-                            setPriceRange([clamped, priceRange[1]]);
-                          }}
-                          className="font-mono tabular-nums bg-transparent w-24 text-left rounded px-1 py-0.5 hover:bg-muted/60 focus:bg-background focus:ring-1 focus:ring-ring focus:outline-none"
+                          value={priceRange[0]}
+                          lo={priceBounds[0]}
+                          hi={priceRange[1]}
+                          align="left"
+                          onCommit={(clamped) => setPriceRange([clamped, priceRange[1]])}
                         />
-                        <input
+                        <PriceInput
                           key={`max-${priceRange[1]}`}
-                          type="text"
-                          inputMode="numeric"
-                          defaultValue={formatPrice(priceRange[1])}
-                          onFocus={(e) => e.currentTarget.select()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
-                            if (e.key === 'Escape') {
-                              e.currentTarget.value = formatPrice(priceRange[1]);
-                              (e.currentTarget as HTMLInputElement).blur();
-                            }
-                          }}
-                          onBlur={(e) => {
-                            const digits = e.currentTarget.value.replace(/\D/g, '');
-                            const n = parseInt(digits, 10);
-                            if (isNaN(n)) {
-                              e.currentTarget.value = formatPrice(priceRange[1]);
-                              return;
-                            }
-                            const clamped = Math.min(priceBounds[1], Math.max(n, priceRange[0]));
-                            setPriceRange([priceRange[0], clamped]);
-                          }}
-                          className="font-mono tabular-nums bg-transparent w-24 text-right rounded px-1 py-0.5 hover:bg-muted/60 focus:bg-background focus:ring-1 focus:ring-ring focus:outline-none"
+                          value={priceRange[1]}
+                          lo={priceRange[0]}
+                          hi={priceBounds[1]}
+                          align="right"
+                          onCommit={(clamped) => setPriceRange([priceRange[0], clamped])}
                         />
                       </div>
                       <Slider

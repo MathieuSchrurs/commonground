@@ -1,27 +1,8 @@
 import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
+import { mapPropertyType, scrapePaginated } from './common';
 
 const SEARCH_URL = 'https://www.zimmo.be/en/to-buy/';
-
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'Accept-Language': 'nl-BE,nl;q=0.9,en-US;q=0.8,en;q=0.7,fr;q=0.6',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Cache-Control': 'no-cache',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Upgrade-Insecure-Requests': '1',
-};
-
-function mapType(type?: string): PropertyListing['property_type'] {
-  const t = (type ?? '').toLowerCase();
-  if (t.includes('apartment') || t.includes('studio') || t.includes('flat')) return 'apartment';
-  if (t.includes('land') || t.includes('plot') || t.includes('ground')) return 'land';
-  if (t.includes('house') || t.includes('villa') || t.includes('chalet') || t.includes('bungalow')) return 'house';
-  return 'other';
-}
 
 function buildSearchUrl(pageNum: number, bbox?: [number, number, number, number]): string {
   const filter: Record<string, unknown> = { filter: {} };
@@ -38,14 +19,16 @@ function buildSearchUrl(pageNum: number, bbox?: [number, number, number, number]
   return `${SEARCH_URL}?search=${encoded}&page=${pageNum}`;
 }
 
-function extractFromScripts(html: string): PropertyListing[] | null {
+export function extractFromScripts(html: string): PropertyListing[] | null {
   const $ = cheerio.load(html);
 
-  // Zimmo sometimes stores data in a <script> with a specific variable
+  // Zimmo sometimes stores data in a <script> with a specific variable.
+  // cheerio's .html() yields only the script's inner text — no closing
+  // </script> tag — so end-of-content must also terminate the match.
   const scriptPatterns = [
-    /window\.__INITIAL_STATE__\s*=\s*({[\s\S]+?});\s*(?:window\.|<\/script>)/,
-    /window\.__APP_STATE__\s*=\s*({[\s\S]+?});\s*(?:window\.|<\/script>)/,
-    /__NUXT__\s*=\s*({[\s\S]+?});\s*<\/script>/,
+    /window\.__INITIAL_STATE__\s*=\s*({[\s\S]+?});\s*(?:window\.|<\/script>|$)/,
+    /window\.__APP_STATE__\s*=\s*({[\s\S]+?});\s*(?:window\.|<\/script>|$)/,
+    /__NUXT__\s*=\s*({[\s\S]+?});\s*(?:<\/script>|$)/,
   ];
 
   for (const pattern of scriptPatterns) {
@@ -98,7 +81,7 @@ function extractFromScripts(html: string): PropertyListing[] | null {
               city: locObj.city as string ?? locObj.locality as string ?? undefined,
               postal_code: String(locObj.postalCode ?? locObj.zip ?? '') || undefined,
               address: [locObj.street, locObj.city].filter(Boolean).join(', ') || undefined,
-              property_type: mapType(r.type as string ?? (r.property as Record<string, unknown>)?.type as string),
+              property_type: mapPropertyType(r.type as string ?? (r.property as Record<string, unknown>)?.type as string),
               bedrooms: (r.bedrooms ?? (r.property as Record<string, unknown>)?.bedroomCount) as number ?? undefined,
               surface_area: (r.livingArea ?? (r.property as Record<string, unknown>)?.livingSurface) as number ?? undefined,
               image_url: ((r.images as Record<string, unknown>[])?.[0]?.url as string) ?? undefined,
@@ -112,7 +95,7 @@ function extractFromScripts(html: string): PropertyListing[] | null {
   return null;
 }
 
-function extractFromHtml(html: string): PropertyListing[] {
+export function extractFromHtml(html: string): PropertyListing[] {
   const $ = cheerio.load(html);
   const listings: PropertyListing[] = [];
 
@@ -173,60 +156,26 @@ function extractFromHtml(html: string): PropertyListing[] {
   return listings;
 }
 
-async function fetchPage(pageNum: number, bbox?: [number, number, number, number]): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  const url = buildSearchUrl(pageNum, bbox);
-  console.log(`[Zimmo] Fetching page ${pageNum}: ${url}`);
-
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: BROWSER_HEADERS });
-  } catch (err) {
-    console.error('[Zimmo] Network error:', err);
-    return { listings: [], blocked: false };
-  }
-
-  console.log(`[Zimmo] Response: ${res.status}`);
-  if (!res.ok) {
-    return { listings: [], blocked: res.status === 403 || res.status === 429 };
-  }
-
-  const html = await res.text();
-  console.log(`[Zimmo] HTML length: ${html.length}`);
-
-  if (html.length < 5000) {
-    console.warn('[Zimmo] Suspiciously short response — possible block');
-    return { listings: [], blocked: true };
-  }
-
-  const fromScripts = extractFromScripts(html);
-  if (fromScripts !== null) {
-    console.log(`[Zimmo] Extracted ${fromScripts.length} from scripts`);
-    return { listings: fromScripts, blocked: false };
-  }
-
-  const fromHtml = extractFromHtml(html);
-  console.log(`[Zimmo] HTML fallback: ${fromHtml.length} listings`);
-  return { listings: fromHtml, blocked: false };
-}
-
 export async function scrapeZimmo(
   bbox: [number, number, number, number],
   maxPages = 3
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
   console.log(`[Zimmo] Starting scrape — bbox: ${bbox.join(', ')}, pages: ${maxPages}`);
 
-  const all: PropertyListing[] = [];
-  let blocked = false;
-
-  for (let p = 1; p <= maxPages; p++) {
-    const result = await fetchPage(p, bbox);
-    blocked = result.blocked;
-    console.log(`[Zimmo] Page ${p}: ${result.listings.length} listings${result.blocked ? ' (BLOCKED)' : ''}`);
-    all.push(...result.listings);
-    if (result.blocked || result.listings.length === 0) break;
-    if (p < maxPages) await new Promise(r => setTimeout(r, 1500));
-  }
-
-  console.log(`[Zimmo] Done. Total: ${all.length}`);
-  return { listings: all, blocked };
+  return scrapePaginated({
+    label: 'Zimmo',
+    maxPages,
+    delayMs: 1500,
+    buildUrl: page => buildSearchUrl(page, bbox),
+    parse: html => {
+      const fromScripts = extractFromScripts(html);
+      if (fromScripts !== null) {
+        console.log(`[Zimmo] Extracted ${fromScripts.length} from scripts`);
+        return fromScripts;
+      }
+      const fromHtml = extractFromHtml(html);
+      console.log(`[Zimmo] HTML fallback: ${fromHtml.length} listings`);
+      return fromHtml;
+    },
+  });
 }

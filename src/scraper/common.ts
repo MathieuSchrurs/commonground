@@ -1,0 +1,114 @@
+import { PropertyListing } from './types';
+
+// Headers that closely mimic a real Chrome browser on macOS. Shared by all
+// scrapers so anti-bot fixes land everywhere at once.
+export const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'nl-BE,nl;q=0.9,en-US;q=0.8,en;q=0.7,fr;q=0.6',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"macOS"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Upgrade-Insecure-Requests': '1',
+};
+
+// Below this size a response is almost certainly a captcha/block page, not a
+// real search-results page.
+const MIN_HTML_LENGTH = 5000;
+
+// Map a site-specific type string ("VILLA", "ground-floor", "building-plot",
+// …) onto our four buckets. Apartment keywords are checked first because
+// "ground-floor" would otherwise match the land keyword "ground".
+export function mapPropertyType(raw?: string): PropertyListing['property_type'] {
+  const t = (raw ?? '').toLowerCase();
+  if (/apartment|studio|flat|penthouse|ground-floor|duplex|triplex|loft/.test(t)) return 'apartment';
+  if (/land|plot|ground/.test(t)) return 'land';
+  if (/house|villa|bungalow|cottage|farm|chalet|mansion|castle|residence/.test(t)) return 'house';
+  return 'other';
+}
+
+export function dedupeById(listings: PropertyListing[]): PropertyListing[] {
+  const seen = new Set<string>();
+  return listings.filter(l => {
+    if (seen.has(l.external_id)) return false;
+    seen.add(l.external_id);
+    return true;
+  });
+}
+
+interface FetchHtmlResult {
+  html: string | null;
+  blocked: boolean;
+}
+
+// Fetch a page and classify failures: network errors and plain HTTP errors
+// just yield no HTML, while 403/429 and suspiciously short responses are
+// flagged as the site actively blocking us.
+async function fetchHtml(label: string, url: string): Promise<FetchHtmlResult> {
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: BROWSER_HEADERS });
+  } catch (err) {
+    console.error(`[${label}] Network error:`, err);
+    return { html: null, blocked: false };
+  }
+
+  if (!res.ok) {
+    console.warn(`[${label}] HTTP ${res.status} — site may be blocking requests`);
+    return { html: null, blocked: res.status === 403 || res.status === 429 };
+  }
+
+  const html = await res.text();
+  if (html.length < MIN_HTML_LENGTH) {
+    console.warn(`[${label}] Response is suspiciously short (${html.length} chars) — likely a block/captcha page`);
+    return { html: null, blocked: true };
+  }
+
+  return { html, blocked: false };
+}
+
+export interface PaginatedScrapeOptions {
+  label: string;
+  maxPages: number;
+  /** Pause between page fetches, to avoid hammering the site. */
+  delayMs: number;
+  buildUrl: (page: number) => string;
+  parse: (html: string) => PropertyListing[];
+}
+
+// The pagination loop every scraper shares: fetch page N, parse it, stop as
+// soon as the site blocks us or a page comes back empty. Results are deduped
+// by external_id since sites repeat listings across pages.
+export async function scrapePaginated(
+  opts: PaginatedScrapeOptions
+): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
+  const { label, maxPages, delayMs, buildUrl, parse } = opts;
+  const all: PropertyListing[] = [];
+  let blocked = false;
+
+  for (let p = 1; p <= maxPages; p++) {
+    const url = buildUrl(p);
+    console.log(`[${label}] Fetching page ${p}: ${url}`);
+
+    const result = await fetchHtml(label, url);
+    blocked = result.blocked;
+    if (result.html === null) break;
+
+    const listings = parse(result.html);
+    console.log(`[${label}] Page ${p}: ${listings.length} listings`);
+
+    all.push(...listings);
+    if (listings.length === 0) break;
+    if (p < maxPages) await new Promise(r => setTimeout(r, delayMs));
+  }
+
+  const unique = dedupeById(all);
+  console.log(`[${label}] Done. ${unique.length} unique listings${blocked ? ' (BLOCKED)' : ''}`);
+  return { listings: unique, blocked };
+}

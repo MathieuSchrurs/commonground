@@ -16,10 +16,16 @@ function getClient() {
 export async function upsertListings(listings: PropertyListing[]): Promise<PropertyListing[]> {
   if (listings.length === 0) return [];
 
+  // Postgres rejects an upsert batch where two rows share the conflict key,
+  // so collapse duplicates on (source, external_id) — last occurrence wins.
+  const deduped = Array.from(
+    new Map(listings.map((l) => [`${l.source}:${l.external_id}`, l])).values()
+  );
+
   const supabase = getClient();
   const { data, error } = await supabase
     .from('property_listings')
-    .upsert(listings, { onConflict: 'source,external_id' })
+    .upsert(deduped, { onConflict: 'source,external_id' })
     .select();
 
   if (error) throw new Error(`Supabase upsert error: ${error.message}`);

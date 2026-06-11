@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Home, Loader2, RefreshCw } from 'lucide-react';
@@ -54,6 +54,12 @@ export default function SessionPage() {
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState('');
   const [scrapeCompleted, setScrapeCompleted] = useState(false);
+
+  // Refs so the realtime callback always sees current state without stale closures
+  const usersRef = useRef<CommuteConstraint[]>([]);
+  const isochronesRef = useRef<Feature<Polygon | MultiPolygon>[]>([]);
+  useEffect(() => { usersRef.current = users; }, [users]);
+  useEffect(() => { isochronesRef.current = isochrones; }, [isochrones]);
 
   // Fetch isochrone for a user
   const fetchIsochrone = useCallback(async (user: CommuteConstraint) => {
@@ -124,48 +130,6 @@ export default function SessionPage() {
     loadSession();
   }, [sessionId, fetchIsochrone]);
 
-  // Set up real-time subscription
-  useEffect(() => {
-    const subscription = supabase
-      .channel(`session_${sessionId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'session_users',
-          filter: `session_id=eq.${sessionId}`,
-        },
-        async () => {
-          // Reload all data when changes occur
-          const response = await fetch(`/api/sessions/${sessionId}`);
-          if (response.ok) {
-            const { users: dbUsers } = await response.json();
-            const constraints = dbUsers.map(dbUserToConstraint);
-            setUsers(constraints);
-
-            // Recompute isochrones
-            const isochronePromises = constraints.map(fetchIsochrone);
-            const isochroneData = await Promise.all(isochronePromises);
-            setIsochrones(isochroneData);
-
-            const newIntersection = computeIntersection(isochroneData);
-            setIntersection(newIntersection);
-            
-            if (newIntersection) {
-              const area = calculateArea(newIntersection);
-              setIntersectionArea(area);
-            }
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [sessionId, fetchIsochrone]);
-
   const computeAndSetIntersection = useCallback((updatedIsochrones: Feature<Polygon | MultiPolygon>[]) => {
     if (updatedIsochrones.length > 0) {
       const newIntersection = computeIntersection(updatedIsochrones);
@@ -182,6 +146,63 @@ export default function SessionPage() {
       setIntersectionArea(null);
     }
   }, []);
+
+  // Set up real-time subscription
+  useEffect(() => {
+    const subscription = supabase
+      .channel(`session_${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'session_users',
+          filter: `session_id=eq.${sessionId}`,
+        },
+        async (payload) => {
+          const eventType = payload.eventType as 'INSERT' | 'UPDATE' | 'DELETE';
+
+          if (eventType === 'DELETE') {
+            const deletedId = (payload.old as { id: string }).id;
+            const idx = usersRef.current.findIndex(u => u.id === deletedId);
+            if (idx === -1) return;
+            const updatedUsers = usersRef.current.filter((_, i) => i !== idx);
+            const updatedIsochrones = isochronesRef.current.filter((_, i) => i !== idx);
+            setUsers(updatedUsers);
+            setIsochrones(updatedIsochrones);
+            computeAndSetIntersection(updatedIsochrones);
+            return;
+          }
+
+          // INSERT or UPDATE — only fetch the one changed isochrone
+          const constraint = dbUserToConstraint(payload.new as DbUser);
+          const isochrone = await fetchIsochrone(constraint);
+
+          if (eventType === 'INSERT') {
+            const updatedUsers = [...usersRef.current, constraint];
+            const updatedIsochrones = [...isochronesRef.current, isochrone];
+            setUsers(updatedUsers);
+            setIsochrones(updatedIsochrones);
+            computeAndSetIntersection(updatedIsochrones);
+          } else {
+            const idx = usersRef.current.findIndex(u => u.id === constraint.id);
+            if (idx === -1) return;
+            const updatedUsers = [...usersRef.current];
+            updatedUsers[idx] = constraint;
+            const updatedIsochrones = [...isochronesRef.current];
+            updatedIsochrones[idx] = isochrone;
+            setUsers(updatedUsers);
+            setIsochrones(updatedIsochrones);
+            computeAndSetIntersection(updatedIsochrones);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [sessionId, fetchIsochrone, computeAndSetIntersection]);
 
   const handleAddUser = useCallback(async (newUser: CommuteConstraint) => {
     setIsLoading(true);

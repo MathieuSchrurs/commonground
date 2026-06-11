@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
+import { mapPropertyType, scrapePaginated } from './common';
 
 // Immoweb embeds the full listing payload (incl. lat/lng) as a Vue prop on
 // every search-result card. We pull the JSON out of the `:classified="..."`
@@ -29,31 +30,6 @@ interface ImmowebPayload {
 
 const SEARCH_URL = 'https://www.immoweb.be/en/search/house,villa,bungalow,farmhouse,country-cottage,apartment/for-sale/belgium';
 
-// Headers that closely mimic a real Chrome browser on macOS
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'Accept-Language': 'nl-BE,nl;q=0.9,en-US;q=0.8,en;q=0.7,fr;q=0.6',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
-  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-  'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"macOS"',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Upgrade-Insecure-Requests': '1',
-};
-
-function mapType(type?: string): PropertyListing['property_type'] {
-  const t = (type ?? '').toLowerCase();
-  if (t.includes('apartment') || t.includes('flat') || t.includes('studio')) return 'apartment';
-  if (t.includes('land') || t.includes('plot') || t.includes('ground')) return 'land';
-  if (t.includes('house') || t.includes('villa') || t.includes('bungalow') || t.includes('cottage') || t.includes('farm')) return 'house';
-  return 'other';
-}
-
 // Decode the small set of HTML entities Immoweb uses inside Vue prop attrs.
 // cheerio already decodes `&quot;` when reading via .attr(), so this is for
 // raw-string fallbacks only.
@@ -69,7 +45,7 @@ function decodeEntities(s: string): string {
 // The page renders `<article id="classified_NNNN">` cards. Every card has an
 // `<iw-classified-item-bookmark :classified="{...JSON...}">` child whose JSON
 // payload holds the entire listing — including lat/lng. We parse from there.
-function extractListings(html: string): PropertyListing[] {
+export function extractListings(html: string): PropertyListing[] {
   const $ = cheerio.load(html);
   const listings: PropertyListing[] = [];
 
@@ -80,7 +56,8 @@ function extractListings(html: string): PropertyListing[] {
 
     // Anchor on the title carries the public URL
     const href = card.find('a.card__title-link, a[href*="/classified/"]').first().attr('href') ?? '';
-    const url = href.startsWith('http') ? href : `https://www.immoweb.be${href}`;
+    // Empty href must stay empty so the per-listing fallback URL kicks in below
+    const url = !href || href.startsWith('http') ? href : `https://www.immoweb.be${href}`;
 
     // The bookmark element holds the full JSON. cheerio decodes &quot; for us.
     const raw = card.find('iw-classified-item-bookmark').attr(':classified')
@@ -125,7 +102,7 @@ function extractListings(html: string): PropertyListing[] {
       latitude: loc?.latitude,
       longitude: loc?.longitude,
       price: payload.price?.mainValue ?? payload.transaction?.sale?.price,
-      property_type: mapType(payload.property?.type ?? payload.property?.subtype),
+      property_type: mapPropertyType(payload.property?.type ?? payload.property?.subtype),
       bedrooms: payload.property?.bedroomCount,
       surface_area: payload.property?.netHabitableSurface,
       land_area: payload.property?.landSurface,
@@ -136,62 +113,20 @@ function extractListings(html: string): PropertyListing[] {
   return listings;
 }
 
-async function fetchPage(pageNum: number, bbox?: [number, number, number, number]): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  let url = `${SEARCH_URL}?orderBy=newest&page=${pageNum}`;
-  if (bbox) {
-    const [minLng, minLat, maxLng, maxLat] = bbox;
-    // Immoweb bbox format: ne=lat,lng&sw=lat,lng (note: lat,lng order)
-    url += `&ne=${maxLat},${maxLng}&sw=${minLat},${minLng}`;
-  }
-
-  console.log(`[Immoweb] Fetching page ${pageNum}: ${url}`);
-
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: BROWSER_HEADERS });
-  } catch (err) {
-    console.error('[Immoweb] Network error:', err);
-    return { listings: [], blocked: false };
-  }
-
-  console.log(`[Immoweb] Response status: ${res.status}`);
-
-  if (!res.ok) {
-    console.warn(`[Immoweb] HTTP ${res.status} — site may be blocking requests`);
-    return { listings: [], blocked: res.status === 403 || res.status === 429 };
-  }
-
-  const html = await res.text();
-  console.log(`[Immoweb] HTML length: ${html.length} chars`);
-
-  if (html.length < 5000) {
-    console.warn('[Immoweb] Response is suspiciously short — likely a block/captcha page');
-    return { listings: [], blocked: true };
-  }
-
-  const listings = extractListings(html);
-  console.log(`[Immoweb] Parsed ${listings.length} listings`);
-  return { listings, blocked: false };
-}
-
 export async function scrapeImmoweb(
   bbox: [number, number, number, number],
   maxPages = 3
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
   console.log(`[Immoweb] Starting scrape — bbox: ${bbox.join(', ')}, pages: ${maxPages}`);
 
-  const all: PropertyListing[] = [];
-  let blocked = false;
+  const [minLng, minLat, maxLng, maxLat] = bbox;
 
-  for (let p = 1; p <= maxPages; p++) {
-    const result = await fetchPage(p, bbox);
-    blocked = result.blocked;
-    console.log(`[Immoweb] Page ${p}: ${result.listings.length} listings${result.blocked ? ' (BLOCKED)' : ''}`);
-    all.push(...result.listings);
-    if (result.blocked || result.listings.length === 0) break;
-    if (p < maxPages) await new Promise(r => setTimeout(r, 1500));
-  }
-
-  console.log(`[Immoweb] Done. Total: ${all.length} listings`);
-  return { listings: all, blocked };
+  return scrapePaginated({
+    label: 'Immoweb',
+    maxPages,
+    delayMs: 1500,
+    // Immoweb bbox format: ne=lat,lng&sw=lat,lng (note: lat,lng order)
+    buildUrl: page => `${SEARCH_URL}?orderBy=newest&page=${page}&ne=${maxLat},${maxLng}&sw=${minLat},${minLng}`,
+    parse: extractListings,
+  });
 }

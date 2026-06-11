@@ -1,14 +1,7 @@
 import * as turf from '@turf/turf';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { PropertyListing } from './types';
-
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'nl-BE,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Cache-Control': 'no-cache',
-};
+import { BROWSER_HEADERS, dedupeById, scrapePaginated } from './common';
 
 // Sample a grid of points that fall INSIDE the polygon and reverse-geocode to Belgian postal codes
 async function discoverPostalCodes(
@@ -65,7 +58,7 @@ async function getSearchUrl(postalCode: string): Promise<string | null> {
   return `https://www.realo.be${first.forSaleUrl}`;
 }
 
-function parsePrice(raw: string): number | undefined {
+export function parsePrice(raw: string): number | undefined {
   // Belgian format: € 1.245.000  (dots are thousands separators)
   const match = raw.match(/€\s*([\d.,\s]+)/);
   if (!match) return undefined;
@@ -74,7 +67,7 @@ function parsePrice(raw: string): number | undefined {
   return isNaN(val) ? undefined : val;
 }
 
-function parseCards(html: string, sourceUrl: string): PropertyListing[] {
+export function parseCards(html: string): PropertyListing[] {
   const cards = html.split('data-scope="componentEstateGridItem"');
   cards.shift();
 
@@ -125,40 +118,6 @@ function parseCards(html: string, sourceUrl: string): PropertyListing[] {
   });
 }
 
-async function scrapeSearchUrl(
-  searchUrl: string,
-  maxPages: number
-): Promise<PropertyListing[]> {
-  const all: PropertyListing[] = [];
-
-  for (let page = 1; page <= maxPages; page++) {
-    const url = `${searchUrl}?page=${page}`;
-    console.log(`[Realo] Fetching ${url}`);
-
-    const res = await fetch(url, { headers: BROWSER_HEADERS }).catch(() => null);
-    if (!res?.ok) {
-      console.warn(`[Realo] HTTP ${res?.status} on ${url}`);
-      break;
-    }
-
-    const html = await res.text();
-    if (html.length < 5000) {
-      console.warn('[Realo] Short response, likely blocked');
-      break;
-    }
-
-    const listings = parseCards(html, url);
-    console.log(`[Realo] Page ${page} of ${searchUrl}: ${listings.length} listings`);
-
-    all.push(...listings);
-
-    if (listings.length === 0) break;
-    if (page < maxPages) await new Promise(r => setTimeout(r, 800));
-  }
-
-  return all;
-}
-
 export async function scrapeRealo(
   polygon: Feature<Polygon | MultiPolygon>,
   maxPagesPerPostalCode = 2
@@ -184,20 +143,22 @@ export async function scrapeRealo(
   console.log(`[Realo] Scraping ${searchUrls.size} unique search URLs`);
 
   const all: PropertyListing[] = [];
-  for (const [url] of searchUrls) {
-    const listings = await scrapeSearchUrl(url, maxPagesPerPostalCode);
-    all.push(...listings);
+  let blocked = false;
+  for (const [searchUrl] of searchUrls) {
+    const result = await scrapePaginated({
+      label: 'Realo',
+      maxPages: maxPagesPerPostalCode,
+      delayMs: 800,
+      buildUrl: page => `${searchUrl}?page=${page}`,
+      parse: parseCards,
+    });
+    all.push(...result.listings);
+    blocked = blocked || result.blocked;
     await new Promise(r => setTimeout(r, 600));
   }
 
-  // Deduplicate by external_id
-  const seen = new Set<string>();
-  const unique = all.filter(l => {
-    if (seen.has(l.external_id)) return false;
-    seen.add(l.external_id);
-    return true;
-  });
-
+  // Deduplicate across postal codes — adjacent searches return the same listings
+  const unique = dedupeById(all);
   console.log(`[Realo] Done. ${unique.length} unique listings across ${searchUrls.size} postal codes`);
-  return { listings: unique, blocked: false };
+  return { listings: unique, blocked };
 }
