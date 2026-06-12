@@ -61,6 +61,16 @@ The actual "common ground": converging as a group.
 - **Scrapers are the most fragile layer.** Sites change markup and block bots.
   Keep parsing logic under test (`npm test`), scrape politely (delays between
   pages, daily cron, 6h cache), treat each scraper as a replaceable input.
+  Run `npx tsx src/scraper/diagnose.ts` to audit live result quality per
+  source (counts, field coverage, dead-link sampling) — June 2026 it caught
+  Immoweb's bbox params silently dying and Immovlan's markup change.
+- **Zimmo is Cloudflare-blocked** ("Just a moment…" challenge) — kept as a
+  graceful no-op; beating it would need a headless browser. Its inventory
+  overlaps heavily with the other sources anyway.
+- **Sources** (June 2026): Realo (richest, street-level), ImmoScoop
+  (Flanders-focused, images), Immoweb (source coordinates), Immovlan
+  (postcode-level only → approximate pins). Candidates not yet integrated:
+  Biddit (notary auctions, SPA/API), 2dehands (private sales).
 - **Cron cadence**: Vercel Hobby allows one run/day. If we need more, a GitHub
   Action on a schedule can curl the same endpoint with the `CRON_SECRET`.
 - **Email alerts** need a provider. Resend has a free tier; the hook point is

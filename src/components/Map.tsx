@@ -49,6 +49,7 @@ const SOURCE_COLORS: Record<string, string> = {
   zimmo: '#2563eb',
   realo: '#7c3aed',
   immovlan: '#16a34a',
+  immoscoop: '#0e7490',
 };
 
 function formatPrice(price?: number): string {
@@ -137,6 +138,7 @@ export default function Map({
     zimmo: true,
     realo: true,
     immovlan: true,
+    immoscoop: true,
   });
   const [priceRange, setPriceRange] = useState<[number, number] | null>(null);
 
@@ -429,12 +431,16 @@ export default function Map({
       el.style.height = '14px';
       el.style.cursor = 'pointer';
 
+      const approximate = listing.location_precision === 'approximate';
+
       const dot = document.createElement('div');
       dot.style.width = '14px';
       dot.style.height = '14px';
       dot.style.borderRadius = '50%';
-      dot.style.backgroundColor = color;
-      dot.style.border = '2px solid white';
+      // Postcode-centroid pins: hollow ring instead of solid dot, so an
+      // approximate location is never mistaken for a real one.
+      dot.style.backgroundColor = approximate ? 'transparent' : color;
+      dot.style.border = approximate ? `2px dashed ${color}` : '2px solid white';
       dot.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)';
       dot.style.transition = 'transform 150ms ease, opacity 300ms ease';
       dot.style.transformOrigin = 'center';
@@ -466,6 +472,7 @@ export default function Map({
           ${isNew ? '<span style="background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;">NEW</span>' : ''}
         </div>
         ${daysOnMarket !== null ? `<div style="font-size:10px;color:#888;margin-bottom:4px;">${daysOnMarket === 0 ? 'First seen today' : `${daysOnMarket} day${daysOnMarket === 1 ? '' : 's'} on the market`}</div>` : ''}
+        ${approximate ? '<div style="font-size:10px;color:#b45309;margin-bottom:4px;">⌖ Approximate location (postcode area) — check the listing for the real address</div>' : ''}
         ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
         ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
         <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
@@ -588,8 +595,12 @@ export default function Map({
       const lovedByAll = users.length > 1 && users.every(u => loves.has(u.id));
       const isNew = newListingKeys?.has(key) ?? false;
 
+      const approx = listing.location_precision === 'approximate';
+      const baseBorderColor = approx ? (SOURCE_COLORS[listing.source] ?? '#6b7280') : 'white';
       dot.style.filter = vetoed ? 'grayscale(0.85)' : '';
-      dot.style.border = loves.size > 0 ? '2px solid #f59e0b' : '2px solid white';
+      dot.style.border = loves.size > 0
+        ? `2px ${approx ? 'dashed' : 'solid'} #f59e0b`
+        : `2px ${approx ? 'dashed' : 'solid'} ${baseBorderColor}`;
 
       const shadows = ['0 1px 3px rgba(0,0,0,0.4)'];
       if (lovedByAll) shadows.push('0 0 0 4px rgba(245,158,11,0.45)');
@@ -850,7 +861,7 @@ export default function Map({
 
                   {/* Per-source filter — only render rows for sources actually present */}
                   <div className="space-y-1 pl-6">
-                    {(['immoweb', 'zimmo', 'realo', 'immovlan'] as const)
+                    {(['immoweb', 'zimmo', 'realo', 'immovlan', 'immoscoop'] as const)
                       .filter(s => properties.some(p => p.source === s))
                       .map(s => (
                         <label key={s} className="flex items-center gap-2 cursor-pointer text-xs">
