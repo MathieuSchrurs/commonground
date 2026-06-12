@@ -18,8 +18,9 @@ House hunting is a weeks-long watch, not a one-time query.
       "NEW" highlight on pins that appeared since your last visit.
 - [ ] Email/push alerts when a new listing lands inside the zone + budget
       (needs an email provider, e.g. Resend — see "Later").
-- [ ] Price-drop and time-on-market history (keep a `price_history` table
-      instead of overwriting `price` on upsert).
+- [x] Price-drop and time-on-market history: `price_history` table records the
+      full series, `previous_price` powers "↓ was €X" in popups and shortlist,
+      `first_seen_at` powers "N days on the market".
 
 ## Phase 2 — The social layer ✅ (in progress)
 

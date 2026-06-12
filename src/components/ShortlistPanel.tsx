@@ -72,6 +72,11 @@ export default function ShortlistPanel({ properties, reactions, users }: Shortli
               <span className="text-sm font-semibold font-mono tabular-nums">
                 {formatPrice(listing.price)}
               </span>
+              {listing.previous_price != null && listing.price != null && listing.previous_price !== listing.price && (
+                <span className={`text-xs font-medium ${listing.price < listing.previous_price ? 'text-green-600' : 'text-red-600'}`}>
+                  {listing.price < listing.previous_price ? '↓' : '↑'} was {formatPrice(listing.previous_price)}
+                </span>
+              )}
               {unanimous && (
                 <Badge className="gap-1 bg-amber-500 text-white hover:bg-amber-500">
                   <Heart className="h-3 w-3 fill-current" />

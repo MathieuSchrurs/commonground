@@ -445,6 +445,15 @@ export default function Map({
 
       const isNew = newListingKeys?.has(key) ?? false;
 
+      const dropped = listing.previous_price != null && listing.price != null
+        && listing.previous_price !== listing.price;
+      const priceChangeHtml = dropped
+        ? `<span style="color:${listing.price! < listing.previous_price! ? '#16a34a' : '#dc2626'};font-size:11px;font-weight:600;margin-left:6px;">${listing.price! < listing.previous_price! ? '↓' : '↑'} was ${formatPrice(listing.previous_price!)}</span>`
+        : '';
+      const daysOnMarket = listing.first_seen_at
+        ? Math.max(0, Math.floor((Date.now() - Date.parse(listing.first_seen_at)) / 86400000))
+        : null;
+
       // Popup is real DOM (not an HTML string) so the vote buttons can carry
       // working click handlers.
       const popupEl = document.createElement('div');
@@ -453,8 +462,10 @@ export default function Map({
         ${listing.image_url ? `<img src="${listing.image_url}" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;" />` : ''}
         <div style="font-weight:700;font-size:14px;margin-bottom:4px;">
           ${formatPrice(listing.price)}
+          ${priceChangeHtml}
           ${isNew ? '<span style="background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;">NEW</span>' : ''}
         </div>
+        ${daysOnMarket !== null ? `<div style="font-size:10px;color:#888;margin-bottom:4px;">${daysOnMarket === 0 ? 'First seen today' : `${daysOnMarket} day${daysOnMarket === 1 ? '' : 's'} on the market`}</div>` : ''}
         ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
         ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
         <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
