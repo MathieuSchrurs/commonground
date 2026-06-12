@@ -1,17 +1,32 @@
 'use client';
 
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Home, Loader2, RefreshCw } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 
 interface ZoneLegendProps {
   users: CommuteConstraint[];
   intersectionArea: number | null;
   hasIntersection: boolean;
+  propertiesCount?: number;
+  isScraping?: boolean;
+  scrapeCompleted?: boolean;
+  scrapeError?: string;
+  onFindProperties?: (force: boolean) => void;
 }
 
-export default function ZoneLegend({ users, intersectionArea, hasIntersection }: ZoneLegendProps) {
+export default function ZoneLegend({
+  users,
+  intersectionArea,
+  hasIntersection,
+  propertiesCount = 0,
+  isScraping = false,
+  scrapeCompleted = false,
+  scrapeError = '',
+  onFindProperties,
+}: ZoneLegendProps) {
   if (users.length === 0) return null;
 
   return (
@@ -32,6 +47,50 @@ export default function ZoneLegend({ users, intersectionArea, hasIntersection }:
             <p className="text-xs text-muted-foreground mt-2">
               The shaded green zone is where everyone&apos;s commute constraint is satisfied.
             </p>
+
+            {onFindProperties && (
+              <div className="mt-3 space-y-2">
+                <Button
+                  onClick={() => onFindProperties(propertiesCount > 0)}
+                  disabled={isScraping}
+                  size="sm"
+                  variant={propertiesCount > 0 ? 'outline' : 'default'}
+                  className="w-full"
+                >
+                  {isScraping ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {propertiesCount > 0 ? 'Refreshing' : 'Searching'}
+                    </>
+                  ) : propertiesCount > 0 ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Refresh properties
+                    </>
+                  ) : (
+                    <>
+                      <Home className="h-3.5 w-3.5" />
+                      Find properties
+                    </>
+                  )}
+                </Button>
+                {scrapeCompleted && (
+                  <p className="text-xs text-muted-foreground">
+                    {propertiesCount > 0 ? (
+                      <>
+                        <span className="font-mono tabular-nums text-foreground font-medium">{propertiesCount}</span>
+                        {' '}{propertiesCount === 1 ? 'property' : 'properties'} for sale — shown as pins on the map.
+                      </>
+                    ) : (
+                      <>No properties found in this zone yet.</>
+                    )}
+                  </p>
+                )}
+                {scrapeError && (
+                  <p className="text-xs text-destructive">{scrapeError}</p>
+                )}
+              </div>
+            )}
           </div>
         ) : users.length > 1 ? (
           <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">

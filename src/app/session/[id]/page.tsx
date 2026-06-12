@@ -3,16 +3,18 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Home, Loader2, RefreshCw } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { supabase } from '@/lib/supabase';
 import { PropertyListing } from '@/scraper/types';
+import { ListingReaction, ReactionKind } from '@/types/reactions';
 import UserInputForm from '@/components/UserInputForm';
 import UserList from '@/components/UserList';
 import Map from '@/components/Map';
 import ZoneLegend from '@/components/ZoneLegend';
 import ShareLink from '@/components/ShareLink';
+import IdentityPicker from '@/components/IdentityPicker';
+import ShortlistPanel from '@/components/ShortlistPanel';
 import { Button } from '@/components/ui/button';
 import { computeIntersection, calculateArea } from '@/lib/geo';
 
@@ -54,12 +56,88 @@ export default function SessionPage() {
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState('');
   const [scrapeCompleted, setScrapeCompleted] = useState(false);
+  const [reactions, setReactions] = useState<ListingReaction[]>([]);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [newListingKeys, setNewListingKeys] = useState<Set<string>>(new Set());
 
   // Refs so the realtime callback always sees current state without stale closures
   const usersRef = useRef<CommuteConstraint[]>([]);
   const isochronesRef = useRef<Feature<Polygon | MultiPolygon>[]>([]);
   useEffect(() => { usersRef.current = users; }, [users]);
   useEffect(() => { isochronesRef.current = isochrones; }, [isochrones]);
+
+  // Identity ("who am I") is per browser, per session — no login needed
+  useEffect(() => {
+    setMyUserId(localStorage.getItem(`commonground:me:${sessionId}`));
+  }, [sessionId]);
+
+  const handleIdentityChange = useCallback((userId: string) => {
+    setMyUserId(userId);
+    localStorage.setItem(`commonground:me:${sessionId}`, userId);
+  }, [sessionId]);
+
+  // Snapshot of the previous visit's timestamp, taken once per page load.
+  // Listings whose first_seen_at is later than this get the NEW badge.
+  const lastSeenRef = useRef<string | null>(null);
+  useEffect(() => {
+    lastSeenRef.current = localStorage.getItem(`commonground:lastSeen:${sessionId}`);
+  }, [sessionId]);
+
+  const applyListings = useCallback((listings: PropertyListing[]) => {
+    setProperties(listings);
+    const lastSeen = lastSeenRef.current;
+    if (lastSeen) {
+      setNewListingKeys(new Set(
+        listings
+          .filter(l => l.first_seen_at && l.first_seen_at > lastSeen)
+          .map(l => `${l.source}:${l.external_id}`)
+      ));
+    }
+    // Next page load compares against this visit (lastSeenRef keeps the OLD
+    // value for the rest of this visit, so refreshes stay consistent)
+    localStorage.setItem(`commonground:lastSeen:${sessionId}`, new Date().toISOString());
+  }, [sessionId]);
+
+  const loadReactions = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/reactions`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setReactions(data.reactions ?? []);
+    } catch {
+      // Non-fatal: votes simply don't show until the next sync
+    }
+  }, [sessionId]);
+
+  useEffect(() => { loadReactions(); }, [loadReactions]);
+
+  // Votes from the others land live; refetching the whole (tiny) set is
+  // simpler and safer than patching state from realtime payloads
+  useEffect(() => {
+    const channel = supabase
+      .channel(`reactions_${sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'listing_reactions', filter: `session_id=eq.${sessionId}` },
+        () => { loadReactions(); }
+      )
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [sessionId, loadReactions]);
+
+  const handleToggleReaction = useCallback(async (listingId: string, reaction: ReactionKind) => {
+    if (!myUserId) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/reactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ listingId, userId: myUserId, reaction }),
+      });
+      if (res.ok) loadReactions();
+    } catch {
+      // Realtime will reconcile on the next event
+    }
+  }, [sessionId, myUserId, loadReactions]);
 
   // Fetch isochrone for a user
   const fetchIsochrone = useCallback(async (user: CommuteConstraint) => {
@@ -176,6 +254,13 @@ export default function SessionPage() {
 
           // INSERT or UPDATE — only fetch the one changed isochrone
           const constraint = dbUserToConstraint(payload.new as DbUser);
+
+          // Our own inserts already landed in local state via handleAddUser;
+          // the realtime echo of that insert must not append a duplicate.
+          if (eventType === 'INSERT' && usersRef.current.some(u => u.id === constraint.id)) {
+            return;
+          }
+
           const isochrone = await fetchIsochrone(constraint);
 
           if (eventType === 'INSERT') {
@@ -347,14 +432,38 @@ export default function SessionPage() {
       if (!res.ok) {
         throw new Error(data.error || 'Failed to fetch properties');
       }
-      setProperties(data.listings ?? []);
+      applyListings(data.listings ?? []);
       setScrapeCompleted(true);
     } catch (err) {
       setScrapeError(err instanceof Error ? err.message : 'Could not load properties');
     } finally {
       setIsScraping(false);
     }
-  }, [intersection]);
+  }, [intersection, applyListings]);
+
+  // The daily cron keeps the DB warm, so stored listings can appear the
+  // moment the zone is known — no button press, no scraping on page load.
+  const autoLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!intersection || autoLoadedRef.current) return;
+    autoLoadedRef.current = true;
+    (async () => {
+      try {
+        const res = await fetch('/api/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ polygon: intersection, cacheOnly: true }),
+        });
+        const data = await res.json();
+        if (res.ok && (data.listings?.length ?? 0) > 0) {
+          applyListings(data.listings);
+          setScrapeCompleted(true);
+        }
+      } catch {
+        // Cache miss is fine — the Find properties button still works
+      }
+    })();
+  }, [intersection, applyListings]);
 
   if (error === 'Session not found') {
     return (
@@ -371,7 +480,9 @@ export default function SessionPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    // Desktop: lock to viewport height so the map always fills to the bottom
+    // and the sidebar scrolls internally. Mobile keeps normal page scrolling.
+    <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-background flex flex-col">
       <header className="border-b border-border bg-background/80 backdrop-blur">
         <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-2 group">
@@ -401,10 +512,25 @@ export default function SessionPage() {
             editingUserId={editingUser?.id}
             isLoading={isLoading}
           />
+          <IdentityPicker
+            users={users}
+            value={myUserId}
+            onChange={handleIdentityChange}
+          />
+          <ShortlistPanel
+            properties={properties}
+            reactions={reactions}
+            users={users}
+          />
           <ZoneLegend
             users={users}
             intersectionArea={intersectionArea}
             hasIntersection={!!intersection}
+            propertiesCount={properties.length}
+            isScraping={isScraping}
+            scrapeCompleted={scrapeCompleted}
+            scrapeError={scrapeError}
+            onFindProperties={handleFindProperties}
           />
 
           {error && error !== 'Session not found' && (
@@ -421,64 +547,11 @@ export default function SessionPage() {
             isochrones={isochrones}
             properties={properties}
             isLoading={isLoading}
+            reactions={reactions}
+            myUserId={myUserId}
+            onToggleReaction={handleToggleReaction}
+            newListingKeys={newListingKeys}
           />
-
-          {intersection && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-[calc(100%-2rem)] max-w-xl">
-              <div className="rounded-lg border border-border bg-background/95 backdrop-blur shadow-lg p-3">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                      Common ground found
-                    </div>
-                    <div className="text-sm">
-                      <span className="font-mono tabular-nums font-semibold">
-                        {intersectionArea?.toFixed(2)}
-                      </span>
-                      <span className="text-muted-foreground"> km² overlap</span>
-                    </div>
-                  </div>
-                  <Button
-                    onClick={() => handleFindProperties(properties.length > 0)}
-                    disabled={isScraping}
-                    size="sm"
-                    variant={properties.length > 0 ? 'outline' : 'default'}
-                  >
-                    {isScraping ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        {properties.length > 0 ? 'Refreshing' : 'Searching'}
-                      </>
-                    ) : properties.length > 0 ? (
-                      <>
-                        <RefreshCw className="h-3.5 w-3.5" />
-                        Refresh properties
-                      </>
-                    ) : (
-                      <>
-                        <Home className="h-3.5 w-3.5" />
-                        Find properties
-                      </>
-                    )}
-                  </Button>
-                </div>
-                {scrapeCompleted && (
-                  <p className="text-xs text-muted-foreground mt-2 pt-2 border-t border-border">
-                    {properties.length > 0 ? (
-                      <>Found <span className="font-mono tabular-nums text-foreground font-medium">{properties.length}</span> {properties.length === 1 ? 'property' : 'properties'} for sale — shown as pins on the map.</>
-                    ) : (
-                      <>No properties found in this zone yet.</>
-                    )}
-                  </p>
-                )}
-                {scrapeError && (
-                  <p className="text-xs text-destructive mt-2 pt-2 border-t border-border">
-                    {scrapeError}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </main>
     </div>

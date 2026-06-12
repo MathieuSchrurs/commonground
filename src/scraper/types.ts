@@ -1,4 +1,6 @@
 export interface PropertyListing {
+  /** Database id — present on rows read back from Supabase, absent on freshly scraped ones */
+  id?: string;
   source: 'immoweb' | 'zimmo' | 'realo' | 'immovlan';
   external_id: string;
   url: string;
@@ -15,4 +17,6 @@ export interface PropertyListing {
   land_area?: number;
   image_url?: string;
   scraped_at?: string;
+  /** Set once when the listing first appears in the DB; never updated by upserts */
+  first_seen_at?: string;
 }

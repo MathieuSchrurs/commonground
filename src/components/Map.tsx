@@ -6,6 +6,7 @@ import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { Eye, Layers, Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { PropertyListing } from '@/scraper/types';
+import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
@@ -17,6 +18,12 @@ interface MapProps {
   isochrones: Feature<Polygon | MultiPolygon>[];
   properties?: PropertyListing[];
   isLoading?: boolean;
+  reactions?: ListingReaction[];
+  /** session_user id of the person at this browser; null until they pick */
+  myUserId?: string | null;
+  onToggleReaction?: (listingId: string, reaction: ReactionKind) => void;
+  /** `source:external_id` keys of listings that appeared since the last visit */
+  newListingKeys?: Set<string>;
 }
 
 interface LayerVisibility {
@@ -85,7 +92,17 @@ function PriceInput({ value, lo, hi, align, onCommit }: {
   );
 }
 
-export default function Map({ users, intersection, isochrones, properties = [], isLoading = false }: MapProps) {
+export default function Map({
+  users,
+  intersection,
+  isochrones,
+  properties = [],
+  isLoading = false,
+  reactions = [],
+  myUserId = null,
+  onToggleReaction,
+  newListingKeys,
+}: MapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -96,7 +113,23 @@ export default function Map({ users, intersection, isochrones, properties = [], 
   // DOM nodes on filter changes. Using a plain object — the component is
   // already named `Map`, which shadows the global Map constructor inside the
   // function body.
-  const propertyMarkersRef = useRef<Record<string, { marker: mapboxgl.Marker; listing: PropertyListing }>>({});
+  const propertyMarkersRef = useRef<Record<string, {
+    marker: mapboxgl.Marker;
+    listing: PropertyListing;
+    renderReactions?: () => void;
+  }>>({});
+
+  // Popup vote buttons are plain DOM created once per marker; these refs let
+  // their click handlers and re-renders always see the latest props without
+  // recreating markers on every reaction change.
+  const reactionsRef = useRef(reactions);
+  useEffect(() => { reactionsRef.current = reactions; }, [reactions]);
+  const myUserIdRef = useRef(myUserId);
+  useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
+  const onToggleReactionRef = useRef(onToggleReaction);
+  useEffect(() => { onToggleReactionRef.current = onToggleReaction; }, [onToggleReaction]);
+  const usersForNamesRef = useRef(users);
+  useEffect(() => { usersForNamesRef.current = users; }, [users]);
 
   // Filters applied to property pins
   const [sourceFilter, setSourceFilter] = useState<Record<string, boolean>>({
@@ -410,30 +443,88 @@ export default function Map({ users, intersection, isochrones, properties = [], 
       el.addEventListener('mouseenter', () => { dot.style.transform = 'scale(1.5)'; });
       el.addEventListener('mouseleave', () => { dot.style.transform = 'scale(1)'; });
 
-      const popupHtml = `
-        <div style="max-width:220px;font-family:sans-serif;">
-          ${listing.image_url ? `<img src="${listing.image_url}" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;" />` : ''}
-          <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${formatPrice(listing.price)}</div>
-          ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
-          ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
-          <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
-            ${listing.bedrooms ? `<span>🛏 ${listing.bedrooms}</span>` : ''}
-            ${listing.surface_area ? `<span>📐 ${listing.surface_area} m²</span>` : ''}
-            ${listing.land_area ? `<span>🌿 ${listing.land_area} m²</span>` : ''}
-          </div>
-          <a href="${listing.url}" target="_blank" rel="noopener noreferrer"
-             style="display:block;text-align:center;background:${color};color:white;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;">
-            View on ${listing.source.charAt(0).toUpperCase() + listing.source.slice(1)}
-          </a>
+      const isNew = newListingKeys?.has(key) ?? false;
+
+      // Popup is real DOM (not an HTML string) so the vote buttons can carry
+      // working click handlers.
+      const popupEl = document.createElement('div');
+      popupEl.style.cssText = 'max-width:220px;font-family:sans-serif;';
+      popupEl.innerHTML = `
+        ${listing.image_url ? `<img src="${listing.image_url}" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;" />` : ''}
+        <div style="font-weight:700;font-size:14px;margin-bottom:4px;">
+          ${formatPrice(listing.price)}
+          ${isNew ? '<span style="background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;">NEW</span>' : ''}
+        </div>
+        ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
+        ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
+        <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
+          ${listing.bedrooms ? `<span>🛏 ${listing.bedrooms}</span>` : ''}
+          ${listing.surface_area ? `<span>📐 ${listing.surface_area} m²</span>` : ''}
+          ${listing.land_area ? `<span>🌿 ${listing.land_area} m²</span>` : ''}
         </div>
       `;
 
+      // Love/veto controls, re-rendered whenever reactions or identity change
+      const reactionsEl = document.createElement('div');
+      popupEl.appendChild(reactionsEl);
+      const renderReactions = () => {
+        reactionsEl.innerHTML = '';
+        if (!listing.id) return; // not yet persisted — nothing to react to
+
+        const rs = reactionsRef.current.filter(r => r.listing_id === listing.id);
+        const me = myUserIdRef.current;
+        const mine = me ? rs.find(r => r.user_id === me)?.reaction : undefined;
+        const nameOf = new globalThis.Map(usersForNamesRef.current.map(u => [u.id, u.name]));
+        const loveNames = rs.filter(r => r.reaction === 'love').map(r => nameOf.get(r.user_id) ?? '?');
+        const vetoNames = rs.filter(r => r.reaction === 'veto').map(r => nameOf.get(r.user_id) ?? '?');
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;';
+        const makeButton = (kind: ReactionKind, label: string, active: boolean, activeBg: string, activeBorder: string) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = label;
+          btn.style.cssText = `flex:1;padding:5px 8px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid ${active ? activeBorder : '#d4d4d8'};background:${active ? activeBg : 'white'};`;
+          if (!me) {
+            btn.disabled = true;
+            btn.style.opacity = '0.5';
+            btn.style.cursor = 'not-allowed';
+          }
+          btn.addEventListener('click', () => onToggleReactionRef.current?.(listing.id!, kind));
+          return btn;
+        };
+        row.appendChild(makeButton('love', `❤️ Love${loveNames.length ? ` · ${loveNames.length}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
+        row.appendChild(makeButton('veto', `✕ Veto${vetoNames.length ? ` · ${vetoNames.length}` : ''}`, mine === 'veto', '#e4e4e7', '#52525b'));
+        reactionsEl.appendChild(row);
+
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size:10px;color:#888;margin-bottom:8px;';
+        if (loveNames.length || vetoNames.length) {
+          note.textContent = [
+            loveNames.length ? `❤️ ${loveNames.join(', ')}` : '',
+            vetoNames.length ? `✕ ${vetoNames.join(', ')}` : '',
+          ].filter(Boolean).join('  ·  ');
+        } else if (!me) {
+          note.textContent = 'Pick your name in the sidebar to vote';
+        }
+        if (note.textContent) reactionsEl.appendChild(note);
+      };
+
+      popupEl.insertAdjacentHTML('beforeend', `
+        <a href="${listing.url}" target="_blank" rel="noopener noreferrer"
+           style="display:block;text-align:center;background:${color};color:white;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;">
+          View on ${listing.source.charAt(0).toUpperCase() + listing.source.slice(1)}
+        </a>
+      `);
+
       if (map.current) {
+        const popup = new mapboxgl.Popup({ offset: 14, maxWidth: '240px' }).setDOMContent(popupEl);
+        popup.on('open', renderReactions);
         const marker = new mapboxgl.Marker(el)
           .setLngLat([Number(listing.longitude), Number(listing.latitude)])
-          .setPopup(new mapboxgl.Popup({ offset: 14, maxWidth: '240px' }).setHTML(popupHtml))
+          .setPopup(popup)
           .addTo(map.current);
-        propertyMarkersRef.current[key] = { marker, listing };
+        propertyMarkersRef.current[key] = { marker, listing, renderReactions };
 
         // Apply current filter at creation. We set opacity on the child `dot`
         // (not `el`) because Mapbox rewrites the outer marker's inline opacity
@@ -449,7 +540,52 @@ export default function Map({ users, intersection, isochrones, properties = [], 
         el.style.pointerEvents = initiallyVisible ? 'auto' : 'none';
       }
     });
-  }, [properties, mapLoaded]);
+  }, [properties, mapLoaded, newListingKeys]);
+
+  // Mapbox only tracks window resizes; when the container itself changes size
+  // (sidebar content growing, layout settling) the canvas keeps its old
+  // dimensions and tiles stop partway. Observe the container directly.
+  useEffect(() => {
+    if (!mapLoaded || !map.current || !mapContainer.current) return;
+    const observer = new ResizeObserver(() => { map.current?.resize(); });
+    observer.observe(mapContainer.current);
+    return () => observer.disconnect();
+  }, [mapLoaded]);
+
+  // Re-render vote buttons inside any open popup when reactions or the
+  // viewer's identity change (e.g. someone else votes while you're looking).
+  useEffect(() => {
+    for (const { marker, renderReactions } of Object.values(propertyMarkersRef.current)) {
+      if (renderReactions && marker.getPopup()?.isOpen()) renderReactions();
+    }
+  }, [reactions, myUserId, users, mapLoaded]);
+
+  // Pin styling from group opinion + freshness:
+  //  - vetoed by anyone  → desaturated
+  //  - loved by someone  → amber ring
+  //  - loved by everyone → amber ring + glow
+  //  - new since last visit → blue halo
+  useEffect(() => {
+    for (const key of Object.keys(propertyMarkersRef.current)) {
+      const { marker, listing } = propertyMarkersRef.current[key];
+      const dot = marker.getElement()?.firstElementChild as HTMLElement | null;
+      if (!dot) continue;
+
+      const rs = listing.id ? reactions.filter(r => r.listing_id === listing.id) : [];
+      const vetoed = rs.some(r => r.reaction === 'veto');
+      const loves = new Set(rs.filter(r => r.reaction === 'love').map(r => r.user_id));
+      const lovedByAll = users.length > 1 && users.every(u => loves.has(u.id));
+      const isNew = newListingKeys?.has(key) ?? false;
+
+      dot.style.filter = vetoed ? 'grayscale(0.85)' : '';
+      dot.style.border = loves.size > 0 ? '2px solid #f59e0b' : '2px solid white';
+
+      const shadows = ['0 1px 3px rgba(0,0,0,0.4)'];
+      if (lovedByAll) shadows.push('0 0 0 4px rgba(245,158,11,0.45)');
+      if (isNew) shadows.push(`0 0 0 ${lovedByAll ? 8 : 4}px rgba(37,99,235,0.35)`);
+      dot.style.boxShadow = shadows.join(', ');
+    }
+  }, [reactions, users, newListingKeys, mapLoaded, properties]);
 
   // Apply master toggle + filter visibility — runs after creation, and again
   // whenever any filter changes. Reads always-current state via the ref Map.
