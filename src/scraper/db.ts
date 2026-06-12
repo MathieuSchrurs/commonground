@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { PropertyListing } from './types';
+import { annotatePriceChanges, ExistingPriceRow } from './price-changes';
 
 function getClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -9,7 +10,8 @@ function getClient() {
 }
 
 /**
- * Upsert a batch of listings into property_listings.
+ * Upsert a batch of listings into property_listings, recording price changes
+ * along the way (previous_price on the row + an append-only price_history).
  * Conflict on (source, external_id) — updates existing rows.
  * Returns the full upserted rows (including DB-generated IDs).
  */
@@ -23,14 +25,50 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
   );
 
   const supabase = getClient();
+
+  // Fetch current prices for this batch so we can detect changes
+  const bySource = new Map<string, string[]>();
+  for (const l of deduped) {
+    const ids = bySource.get(l.source) ?? [];
+    ids.push(l.external_id);
+    bySource.set(l.source, ids);
+  }
+  const existing: ExistingPriceRow[] = [];
+  for (const [source, externalIds] of bySource) {
+    const { data, error } = await supabase
+      .from('property_listings')
+      .select('id, source, external_id, price, previous_price, price_changed_at')
+      .eq('source', source)
+      .in('external_id', externalIds);
+    if (error) throw new Error(`Supabase price lookup error: ${error.message}`);
+    existing.push(...((data ?? []) as ExistingPriceRow[]));
+  }
+
+  const { upserts, history } = annotatePriceChanges(deduped, existing);
+
   const { data, error } = await supabase
     .from('property_listings')
-    .upsert(deduped, { onConflict: 'source,external_id' })
+    .upsert(upserts, { onConflict: 'source,external_id' })
     .select();
 
   if (error) throw new Error(`Supabase upsert error: ${error.message}`);
 
-  return (data ?? []) as PropertyListing[];
+  const rows = (data ?? []) as PropertyListing[];
+
+  // Append the price series — history keys resolve to DB ids via the upsert result
+  if (history.length > 0) {
+    const idByKey = new Map(rows.map(r => [`${r.source}:${r.external_id}`, r.id]));
+    const entries = history
+      .map(h => ({ listing_id: idByKey.get(h.key), price: h.price }))
+      .filter((e): e is { listing_id: string; price: number } => !!e.listing_id);
+    if (entries.length > 0) {
+      const { error: histError } = await supabase.from('price_history').insert(entries);
+      // Non-fatal: losing a history point must not fail the scrape
+      if (histError) console.error(`[db] price_history insert failed: ${histError.message}`);
+    }
+  }
+
+  return rows;
 }
 
 /**

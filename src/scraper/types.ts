@@ -19,4 +19,7 @@ export interface PropertyListing {
   scraped_at?: string;
   /** Set once when the listing first appears in the DB; never updated by upserts */
   first_seen_at?: string;
+  /** The price before the most recent change, if it ever changed */
+  previous_price?: number | null;
+  price_changed_at?: string | null;
 }
