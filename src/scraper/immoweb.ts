@@ -28,7 +28,7 @@ interface ImmowebPayload {
   media?: { pictures?: Array<{ mediumUrl?: string; largeUrl?: string }> };
 }
 
-const SEARCH_URL = 'https://www.immoweb.be/en/search/house,villa,bungalow,farmhouse,country-cottage,apartment/for-sale/belgium';
+const SEARCH_URL = 'https://www.immoweb.be/en/search/house,villa,bungalow,farmhouse,country-cottage,apartment/for-sale';
 
 // Decode the small set of HTML entities Immoweb uses inside Vue prop attrs.
 // cheerio already decodes `&quot;` when reading via .attr(), so this is for
@@ -113,20 +113,24 @@ export function extractListings(html: string): PropertyListing[] {
   return listings;
 }
 
+// Immoweb's ne=/sw= bbox params silently stopped filtering (verified June
+// 2026: a Gent bbox returned listings from all over Belgium). The
+// postalCodes filter does work, so we search by the postal codes discovered
+// inside the polygon instead.
 export async function scrapeImmoweb(
-  bbox: [number, number, number, number],
+  postalCodes: string[],
   maxPages = 3
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  console.log(`[Immoweb] Starting scrape — bbox: ${bbox.join(', ')}, pages: ${maxPages}`);
+  if (postalCodes.length === 0) return { listings: [], blocked: false };
+  console.log(`[Immoweb] Starting scrape — postal codes: ${postalCodes.join(',')}, pages: ${maxPages}`);
 
-  const [minLng, minLat, maxLng, maxLat] = bbox;
+  const codes = postalCodes.join(',');
 
   return scrapePaginated({
     label: 'Immoweb',
     maxPages,
     delayMs: 1500,
-    // Immoweb bbox format: ne=lat,lng&sw=lat,lng (note: lat,lng order)
-    buildUrl: page => `${SEARCH_URL}?orderBy=newest&page=${page}&ne=${maxLat},${maxLng}&sw=${minLat},${minLng}`,
+    buildUrl: page => `${SEARCH_URL}?postalCodes=${codes}&orderBy=newest&page=${page}`,
     parse: extractListings,
   });
 }

@@ -27,6 +27,13 @@ describe('mapPropertyType', () => {
     expect(mapPropertyType('LAND')).toBe('land');
   });
 
+  it('maps Dutch vocabulary (ImmoScoop)', () => {
+    expect(mapPropertyType('Huis')).toBe('house');
+    expect(mapPropertyType('Appartement')).toBe('apartment');
+    expect(mapPropertyType('Bouwgrond')).toBe('land');
+    expect(mapPropertyType('Hoeve')).toBe('house');
+  });
+
   it('falls back to other', () => {
     expect(mapPropertyType('garage')).toBe('other');
     expect(mapPropertyType(undefined)).toBe('other');

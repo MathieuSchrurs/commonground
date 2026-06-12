@@ -20,6 +20,7 @@ describe('parseCards', () => {
         <span>€ 350.000</span>
         <span>3 bed</span>
         <span>120 m²</span>
+        <div data-images="{srcAt2x&quot;:&quot;https:\\/\\/realocdn.com\\/image\\/5\\/abc.jpg\\/736x491&quot;}"></div>
       </div>`;
 
     const [listing] = parseCards(html);
@@ -33,6 +34,8 @@ describe('parseCards', () => {
       price: 350000,
       bedrooms: 3,
       surface_area: 120,
+      // entity-encoded, slash-escaped JSON must still yield a clean URL
+      image_url: 'https://realocdn.com/image/5/abc.jpg/736x491',
     });
   });
 

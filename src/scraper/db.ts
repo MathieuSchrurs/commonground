@@ -72,9 +72,10 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
 }
 
 /**
- * Delete listings for a given source within a bounding box that were not
- * refreshed during the current scrape (scraped_at older than scrapeStartedAt).
- * This removes sold/delisted properties automatically.
+ * Delete listings for a given source within a bounding box whose scraped_at
+ * is older than the given cutoff. The caller chooses the cutoff — refresh.ts
+ * passes "one week ago" so listings merely absent from the newest-first pages
+ * of a single scrape aren't mistaken for sold ones.
  */
 export async function deleteStaleListings(
   source: string,
@@ -82,7 +83,7 @@ export async function deleteStaleListings(
   minLat: number,
   maxLng: number,
   maxLat: number,
-  scrapeStartedAt: string
+  cutoff: string
 ): Promise<void> {
   const supabase = getClient();
   const { error } = await supabase
@@ -93,7 +94,7 @@ export async function deleteStaleListings(
     .lte('longitude', maxLng)
     .gte('latitude', minLat)
     .lte('latitude', maxLat)
-    .lt('scraped_at', scrapeStartedAt);
+    .lt('scraped_at', cutoff);
 
   if (error) throw new Error(`Supabase delete error: ${error.message}`);
 }

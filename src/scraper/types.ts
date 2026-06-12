@@ -1,7 +1,7 @@
 export interface PropertyListing {
   /** Database id — present on rows read back from Supabase, absent on freshly scraped ones */
   id?: string;
-  source: 'immoweb' | 'zimmo' | 'realo' | 'immovlan';
+  source: 'immoweb' | 'zimmo' | 'realo' | 'immovlan' | 'immoscoop';
   external_id: string;
   url: string;
   title?: string;
@@ -22,4 +22,6 @@ export interface PropertyListing {
   /** The price before the most recent change, if it ever changed */
   previous_price?: number | null;
   price_changed_at?: string | null;
+  /** 'exact' = source coords or street-level geocode; 'approximate' = postcode centroid */
+  location_precision?: 'exact' | 'approximate';
 }

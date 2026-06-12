@@ -6,8 +6,9 @@ import { PropertyListing } from './types';
 // coordinates + similar price + matching property_type.
 //
 // Source priority for which copy to keep: realo (precise street-level coords,
-// rich data) > immoweb > immovlan (city-centroid only) > zimmo.
-const SOURCE_RANK: Record<string, number> = { realo: 4, immoweb: 3, immovlan: 2, zimmo: 1 };
+// rich data) > immoscoop (street addresses, images) > immoweb > immovlan
+// (postcode-level only) > zimmo.
+const SOURCE_RANK: Record<string, number> = { realo: 5, immoscoop: 4, immoweb: 3, immovlan: 2, zimmo: 1 };
 
 export function streetKey(l: PropertyListing): string | null {
   if (!l.postal_code || !l.address) return null;
@@ -79,6 +80,9 @@ export function dedupeAcrossSources(
       if (usedIdx.has(j)) continue;
       const a = noStreetKey[i];
       const b = noStreetKey[j];
+      // Postcode-centroid coordinates stack unrelated listings on the same
+      // point — never merge on proximity unless both locations are exact.
+      if (a.location_precision === 'approximate' || b.location_precision === 'approximate') continue;
       if (
         a.property_type === b.property_type &&
         metersBetween(a, b) < 15 &&

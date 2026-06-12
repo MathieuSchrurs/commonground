@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseCards, parsePrice } from './immovlan';
 
 const card = `
-  <article itemscope itemtype="http://schema.org/Place"
+  <article itemscope itemtype="http://schema.org/House"
            data-url="https://immovlan.be/en/detail/house/for-sale/9000/gent/rbs12345">
     <span itemprop="postalCode">9000</span>
     <span itemprop="addressLocality">Gent</span>
@@ -33,7 +33,7 @@ describe('parseCards', () => {
   it('skips multi-unit projects (no /detail/ in the URL)', () => {
     const html = `
       <article itemscope itemtype="http://schema.org/Place"
-               data-url="https://immovlan.be/en/project/for-sale/9000/gent/proj1">
+               data-url="https://immovlan.be/en/projectdetail/1132102-1049619">
       </article>`;
     expect(parseCards(html)).toEqual([]);
   });

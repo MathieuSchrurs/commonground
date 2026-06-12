@@ -1,8 +1,12 @@
 import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
-import { mapPropertyType, scrapePaginated } from './common';
+import { Area } from './areas';
+import { mapPropertyType, scrapePaginated, dedupeById } from './common';
 
-const BASE_URL = 'https://immovlan.be/en/real-estate?transactiontypes=for-sale&propertytypes=house,apartment&countries=BE';
+const BASE_URL = 'https://immovlan.be/en/real-estate?transactiontypes=for-sale&propertytypes=house,apartment';
+
+// Towns scraped per run; each costs maxPages requests
+const MAX_TOWNS = 8;
 
 export function parsePrice(raw: string): number | undefined {
   // "650 000 €" → 650000   or   "225 000 € - 392 655 €" → take the first
@@ -18,7 +22,9 @@ export function parseCards(html: string): PropertyListing[] {
   const $ = cheerio.load(html);
   const listings: PropertyListing[] = [];
 
-  $('article[itemscope][itemtype="http://schema.org/Place"]').each((_, el) => {
+  // Cards carry per-type itemtypes (schema.org/House, /Apartment, …; it was
+  // a single schema.org/Place before mid-2026), so anchor on data-url instead.
+  $('article[itemscope][data-url]').each((_, el) => {
     const card = $(el);
     const url = card.attr('data-url') ?? '';
     if (!url) return;
@@ -70,20 +76,35 @@ export function parseCards(html: string): PropertyListing[] {
   return listings;
 }
 
+// Immovlan's towns= filter takes "postal-cityslug" (e.g. towns=9000-gent) and
+// only honours one town per request, so we scrape town by town.
 export async function scrapeImmovlan(
-  // bbox is accepted for signature parity with the other scrapers; Immovlan's
-  // public search doesn't bbox-filter, so the polygon filter in route.ts does
-  // the geographic narrowing after geocoding.
-  _bbox: [number, number, number, number],
-  maxPages = 3
+  areas: Area[],
+  maxPages = 2
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  console.log(`[Immovlan] Starting scrape — pages: ${maxPages}`);
+  const towns = areas.filter(a => a.citySlug).slice(0, MAX_TOWNS);
+  if (towns.length === 0) return { listings: [], blocked: false };
+  console.log(`[Immovlan] Starting scrape — ${towns.length} towns, ${maxPages} pages each`);
 
-  return scrapePaginated({
-    label: 'Immovlan',
-    maxPages,
-    delayMs: 1000,
-    buildUrl: page => `${BASE_URL}&page=${page}`,
-    parse: parseCards,
-  });
+  const all: PropertyListing[] = [];
+  let blocked = false;
+
+  for (const town of towns) {
+    const result = await scrapePaginated({
+      label: 'Immovlan',
+      maxPages,
+      delayMs: 1000,
+      buildUrl: page => `${BASE_URL}&towns=${town.postalCode}-${town.citySlug}&page=${page}`,
+      parse: parseCards,
+    });
+    all.push(...result.listings);
+    blocked = blocked || result.blocked;
+    if (result.blocked) break;
+    await new Promise(r => setTimeout(r, 800));
+  }
+
+  // The same listing can appear under adjacent towns
+  const unique = dedupeById(all);
+  console.log(`[Immovlan] Done. ${unique.length} unique listings across ${towns.length} towns`);
+  return { listings: unique, blocked };
 }

@@ -1,48 +1,6 @@
-import * as turf from '@turf/turf';
-import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { PropertyListing } from './types';
+import { Area } from './areas';
 import { BROWSER_HEADERS, dedupeById, scrapePaginated } from './common';
-
-// Sample a grid of points that fall INSIDE the polygon and reverse-geocode to Belgian postal codes
-async function discoverPostalCodes(
-  polygon: Feature<Polygon | MultiPolygon>,
-  mapboxToken: string
-): Promise<string[]> {
-  const [minLng, minLat, maxLng, maxLat] = turf.bbox(polygon);
-  const steps = 5;
-  const candidates: [number, number][] = [];
-
-  for (let i = 0; i <= steps; i++) {
-    for (let j = 0; j <= steps; j++) {
-      const lng = minLng + (maxLng - minLng) * (i / steps);
-      const lat = minLat + (maxLat - minLat) * (j / steps);
-      const pt = turf.point([lng, lat]);
-      if (turf.booleanPointInPolygon(pt, polygon)) {
-        candidates.push([lng, lat]);
-      }
-    }
-  }
-
-  // Always include the centroid
-  const centroid = turf.centroid(polygon);
-  candidates.push([centroid.geometry.coordinates[0], centroid.geometry.coordinates[1]]);
-
-  console.log(`[Realo] Sampling ${candidates.length} points inside polygon`);
-
-  const results = await Promise.all(
-    candidates.map(async ([lng, lat]) => {
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?types=postcode&country=BE&limit=1&access_token=${mapboxToken}`;
-      const res = await fetch(url).catch(() => null);
-      if (!res?.ok) return null;
-      const data = await res.json();
-      return (data.features?.[0]?.text as string) ?? null;
-    })
-  );
-
-  const unique = [...new Set(results.filter((c): c is string => !!c))];
-  console.log(`[Realo] Discovered ${unique.length} postal codes inside polygon: ${unique.join(', ')}`);
-  return unique;
-}
 
 // Use Realo's suggest API to get the proper search URL for a postal code
 async function getSearchUrl(postalCode: string): Promise<string | null> {
@@ -92,9 +50,10 @@ export function parseCards(html: string): PropertyListing[] {
     const surfaceRaw = surfaceMatch ? parseInt(surfaceMatch[1], 10) : undefined;
     const surface = surfaceRaw !== undefined && surfaceRaw < 100000 ? surfaceRaw : undefined;
 
-    // First image from the data-images JSON blob
-    const imgMatch = card.match(/"srcAt2x":"(https:\/\/realocdn\.com\/[^"]+)"/);
-    const imageUrl = imgMatch?.[1];
+    // First image from the data-images JSON blob. The JSON arrives
+    // HTML-entity-encoded (&quot;) with escaped slashes, so match both forms.
+    const imgMatch = card.match(/srcAt2x(?:&quot;|"):(?:&quot;|")(https:[\s\S]+?)(?:&quot;|")/);
+    const imageUrl = imgMatch ? imgMatch[1].replace(/\\\//g, '/') : undefined;
 
     // Property type hint from card classes
     const typeHint = card.match(/class="[^"]*component-estate-grid-item[^"]*"/)?.[0] ?? '';
@@ -119,15 +78,12 @@ export function parseCards(html: string): PropertyListing[] {
 }
 
 export async function scrapeRealo(
-  polygon: Feature<Polygon | MultiPolygon>,
+  areas: Area[],
   maxPagesPerPostalCode = 2
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  const mapboxToken = process.env.MAPBOX_SECRET_TOKEN;
-  if (!mapboxToken) throw new Error('MAPBOX_SECRET_TOKEN is not set');
-
-  const postalCodes = await discoverPostalCodes(polygon, mapboxToken);
+  const postalCodes = areas.map(a => a.postalCode);
   if (postalCodes.length === 0) {
-    console.warn('[Realo] No postal codes discovered inside polygon');
+    console.warn('[Realo] No postal codes to scrape');
     return { listings: [], blocked: false };
   }
 
