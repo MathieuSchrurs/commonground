@@ -9,6 +9,16 @@ function getClient() {
   return createClient(url, key);
 }
 
+// .in() filters go into the request URI; too many ids exceeds the server's
+// URI length limit, so large key lookups must be chunked.
+const IN_CHUNK_SIZE = 200;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 /**
  * Upsert a batch of listings into property_listings, recording price changes
  * along the way (previous_price on the row + an append-only price_history).
@@ -35,13 +45,15 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
   }
   const existing: ExistingPriceRow[] = [];
   for (const [source, externalIds] of bySource) {
-    const { data, error } = await supabase
-      .from('property_listings')
-      .select('id, source, external_id, price, previous_price, price_changed_at')
-      .eq('source', source)
-      .in('external_id', externalIds);
-    if (error) throw new Error(`Supabase price lookup error: ${error.message}`);
-    existing.push(...((data ?? []) as ExistingPriceRow[]));
+    for (const ids of chunk(externalIds, IN_CHUNK_SIZE)) {
+      const { data, error } = await supabase
+        .from('property_listings')
+        .select('id, source, external_id, price, previous_price, price_changed_at')
+        .eq('source', source)
+        .in('external_id', ids);
+      if (error) throw new Error(`Supabase price lookup error: ${error.message}`);
+      existing.push(...((data ?? []) as ExistingPriceRow[]));
+    }
   }
 
   const { upserts, history } = annotatePriceChanges(deduped, existing);
@@ -69,6 +81,53 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
   }
 
   return rows;
+}
+
+export interface KnownLocation {
+  latitude: number;
+  longitude: number;
+  location_precision: 'exact' | 'approximate' | null;
+}
+
+/**
+ * Fetch already-stored coordinates for a batch of (source, external_id) keys,
+ * so a refresh doesn't re-geocode listings it has located before.
+ */
+export async function fetchKnownLocations(
+  listings: PropertyListing[]
+): Promise<Map<string, KnownLocation>> {
+  const known = new Map<string, KnownLocation>();
+  if (listings.length === 0) return known;
+
+  const supabase = getClient();
+  const bySource = new Map<string, string[]>();
+  for (const l of listings) {
+    const ids = bySource.get(l.source) ?? [];
+    ids.push(l.external_id);
+    bySource.set(l.source, ids);
+  }
+
+  for (const [source, externalIds] of bySource) {
+    for (const ids of chunk(externalIds, IN_CHUNK_SIZE)) {
+      const { data, error } = await supabase
+        .from('property_listings')
+        .select('source, external_id, latitude, longitude, location_precision')
+        .eq('source', source)
+        .in('external_id', ids)
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null);
+      if (error) throw new Error(`Supabase location lookup error: ${error.message}`);
+      for (const row of (data ?? []) as Array<{ source: string; external_id: string } & KnownLocation>) {
+        known.set(`${row.source}:${row.external_id}`, {
+          latitude: Number(row.latitude),
+          longitude: Number(row.longitude),
+          location_precision: row.location_precision,
+        });
+      }
+    }
+  }
+
+  return known;
 }
 
 /**

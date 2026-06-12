@@ -7,7 +7,7 @@ import { scrapeImmovlan } from './immovlan';
 import { scrapeImmoscoop } from './immoscoop';
 import { geocodeAddress } from './geocode';
 import { discoverAreas } from './areas';
-import { upsertListings, deleteStaleListings } from './db';
+import { upsertListings, deleteStaleListings, fetchKnownLocations } from './db';
 import { PropertyListing } from './types';
 
 type ScrapeResult = { listings: PropertyListing[]; blocked: boolean };
@@ -73,35 +73,63 @@ export async function refreshListingsForPolygon(
     console.log(`[refresh] ${s.name}: ${s.listings.length} listings${s.blocked ? ' (BLOCKED)' : ''}`);
   });
 
-  // Geocode listings missing coordinates, tracking precision: a street-level
-  // match is 'exact'; a postcode-centroid fallback is 'approximate' and gets
-  // rendered differently so it can't masquerade as a real location.
+  // Locate every listing, cheapest path first:
+  //  1. coordinates straight from the source (Immoweb payload, Zimmo JSON-LD)
+  //  2. coordinates we stored on a previous refresh (no Mapbox call at all)
+  //  3. fresh geocode — rate-limited, because Mapbox allows 600 req/min and a
+  //     naive parallel burst of hundreds gets 429s that silently strand
+  //     listings without coordinates.
   const combined = sources.flatMap(s => s.listings);
-  const withCoords = await Promise.allSettled(
-    combined.map(async (listing): Promise<PropertyListing> => {
-      if (listing.latitude && listing.longitude) {
-        return { ...listing, location_precision: 'exact' };
-      }
-      const query = listing.address
-        ? `${listing.address}, Belgium`
-        : [listing.postal_code, listing.city, 'Belgium'].filter(Boolean).join(', ');
-      if (!query.trim()) return listing;
-      const geo = await geocodeAddress(query).catch(() => null);
-      if (!geo) return listing;
-      return {
-        ...listing,
-        latitude: geo.latitude,
-        longitude: geo.longitude,
-        location_precision: geo.precision,
-      };
-    })
-  );
+  const known = await fetchKnownLocations(combined);
 
-  const geocoded = withCoords
-    .filter((r): r is PromiseFulfilledResult<PropertyListing> => r.status === 'fulfilled')
-    .map(r => r.value)
-    // Stamp scraped_at so stale detection can purge long-unseen rows
-    .map(l => ({ ...l, scraped_at: scrapeStartedAt }));
+  const located: PropertyListing[] = [];
+  const needGeocode: PropertyListing[] = [];
+  for (const listing of combined) {
+    if (listing.latitude && listing.longitude) {
+      located.push({ ...listing, location_precision: 'exact' });
+      continue;
+    }
+    const prior = known.get(`${listing.source}:${listing.external_id}`);
+    if (prior) {
+      located.push({
+        ...listing,
+        latitude: prior.latitude,
+        longitude: prior.longitude,
+        location_precision: prior.location_precision ?? undefined,
+      });
+      continue;
+    }
+    needGeocode.push(listing);
+  }
+
+  console.log(`[refresh] Locations: ${located.length} known, ${needGeocode.length} to geocode`);
+
+  // Batches of 10 with a 1.1s pause ≈ max 540 req/min, under Mapbox's 600
+  const GEOCODE_BATCH = 10;
+  for (let i = 0; i < needGeocode.length; i += GEOCODE_BATCH) {
+    const batch = needGeocode.slice(i, i + GEOCODE_BATCH);
+    const results = await Promise.all(
+      batch.map(async (listing): Promise<PropertyListing> => {
+        const query = listing.address
+          ? `${listing.address}, Belgium`
+          : [listing.postal_code, listing.city, 'Belgium'].filter(Boolean).join(', ');
+        if (!query.trim()) return listing;
+        const geo = await geocodeAddress(query).catch(() => null);
+        if (!geo) return listing;
+        return {
+          ...listing,
+          latitude: geo.latitude,
+          longitude: geo.longitude,
+          location_precision: geo.precision,
+        };
+      })
+    );
+    located.push(...results);
+    if (i + GEOCODE_BATCH < needGeocode.length) await new Promise(r => setTimeout(r, 1100));
+  }
+
+  // Stamp scraped_at so stale detection can purge long-unseen rows
+  const geocoded = located.map(l => ({ ...l, scraped_at: scrapeStartedAt }));
 
   const geocodedWithCoords = geocoded.filter(l => l.latitude && l.longitude).length;
   console.log(`[refresh] Geocoded: ${geocodedWithCoords} with coords, ${geocoded.length - geocodedWithCoords} without`);

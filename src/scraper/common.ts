@@ -65,7 +65,15 @@ async function fetchHtml(label: string, url: string): Promise<FetchHtmlResult> {
     return { html: null, blocked: res.status === 403 || res.status === 429 };
   }
 
-  const html = await res.text();
+  // Reading the body can fail too (connection reset mid-download throws
+  // "terminated"); treat that as a failed page, not a fatal error.
+  let html: string;
+  try {
+    html = await res.text();
+  } catch (err) {
+    console.error(`[${label}] Body read failed:`, err);
+    return { html: null, blocked: false };
+  }
   if (html.length < MIN_HTML_LENGTH) {
     console.warn(`[${label}] Response is suspiciously short (${html.length} chars) — likely a block/captcha page`);
     return { html: null, blocked: true };
