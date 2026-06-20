@@ -17,7 +17,7 @@ export default async function JoinPage({
 
   let sessionId: string | null = null;
   try {
-    const session = await joinSession(token, accountId);
+    const session = await joinSession(token);
     sessionId = session.id;
   } catch {
     sessionId = null;

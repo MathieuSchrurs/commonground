@@ -151,22 +151,6 @@ export async function renameSession(
   return data as unknown as SessionRow;
 }
 
-// Add an account to a session's membership (used by create and by invites, #7).
-export async function addMember(
-  sessionId: string,
-  accountId: string,
-  role: 'owner' | 'member' = 'member',
-): Promise<void> {
-  const db = await createClient();
-  const { error } = await db
-    .from('session_members')
-    .upsert([{ session_id: sessionId, account_id: accountId, role }] as never, {
-      onConflict: 'session_id,account_id',
-      ignoreDuplicates: true, // don't downgrade an existing owner to member
-    });
-  if (error) throw error;
-}
-
 // The shareable invite token for a session, for a member to hand out. Members
 // only — a non-member can't read or mint it.
 export async function getInviteToken(sessionId: string, accountId: string): Promise<string> {
@@ -188,20 +172,14 @@ export async function getInviteToken(sessionId: string, accountId: string): Prom
   return (data as unknown as { invite_token: string }).invite_token;
 }
 
-// Join a session via its invite token (idempotent). NotFound if the token is
-// invalid. Returns the joined session.
-export async function joinSession(token: string, accountId: string): Promise<SessionRow> {
+// Join a session via its invite token (idempotent). Goes through the
+// join_session RPC because, under RLS, a non-member can't read the session to
+// join it. The RPC adds auth.uid() as a member; we then read the joined session.
+export async function joinSession(token: string): Promise<SessionRow> {
   const db = await createClient();
-  const { data, error } = await db
-    .from('sessions')
-    .select('*')
-    .eq('invite_token', token)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) throw new NotFound('invite', token);
-  const session = data as unknown as SessionRow;
-  await addMember(session.id, accountId, 'member');
-  return session;
+  const { data, error } = await db.rpc('join_session', { p_token: token });
+  if (error || !data) throw new NotFound('invite', token);
+  return getSession(data as string);
 }
 
 // Every participant in a session, oldest first, as domain constraints.
@@ -266,7 +244,6 @@ export async function addUser(
     .select()
     .single();
   if (error) throw error;
-  await addMember(sessionId, accountId, 'member');
   return toCommuteConstraint(data as unknown as SessionUserRow);
 }
 
