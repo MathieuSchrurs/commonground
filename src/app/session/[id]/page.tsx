@@ -12,7 +12,6 @@ import UserList from '@/components/UserList';
 import Map from '@/components/Map';
 import ZoneLegend from '@/components/ZoneLegend';
 import SessionHeader from '@/components/SessionHeader';
-import IdentityPicker from '@/components/IdentityPicker';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import { Button } from '@/components/ui/button';
 import { computeIntersection, calculateArea } from '@/lib/geo';
@@ -44,14 +43,12 @@ export default function SessionPage() {
   useEffect(() => { usersRef.current = users; }, [users]);
   useEffect(() => { isochronesRef.current = isochrones; }, [isochrones]);
 
-  // Identity ("who am I") is per browser, per session — no login needed
+  // "Who am I" is the participant linked to the signed-in account — no picking.
   useEffect(() => {
-    setMyUserId(localStorage.getItem(`commonground:me:${sessionId}`));
-  }, [sessionId]);
-
-  const handleIdentityChange = useCallback((userId: string) => {
-    setMyUserId(userId);
-    localStorage.setItem(`commonground:me:${sessionId}`, userId);
+    fetch(`/api/sessions/${sessionId}/me`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMyUserId(d?.participant?.id ?? null))
+      .catch(() => {});
   }, [sessionId]);
 
   // Snapshot of the previous visit's timestamp, taken once per page load.
@@ -234,8 +231,8 @@ export default function SessionPage() {
           // the shared mapper (they never pass through the store).
           const constraint = toCommuteConstraint(payload.new as SessionUserRow);
 
-          // Our own inserts already landed in local state via handleAddUser;
-          // the realtime echo of that insert must not append a duplicate.
+          // Skip if this participant is already in state — guards the add echo
+          // and any double-delivered event from duplicating a row.
           if (eventType === 'INSERT' && usersRef.current.some(u => u.id === constraint.id)) {
             return;
           }
@@ -243,6 +240,9 @@ export default function SessionPage() {
           const isochrone = await fetchIsochrone(constraint);
 
           if (eventType === 'INSERT') {
+            // Re-check after the async fetch: a concurrent delivery may have
+            // appended it while we were computing the isochrone.
+            if (usersRef.current.some(u => u.id === constraint.id)) return;
             const updatedUsers = [...usersRef.current, constraint];
             const updatedIsochrones = [...isochronesRef.current, isochrone];
             setUsers(updatedUsers);
@@ -293,24 +293,17 @@ export default function SessionPage() {
       }
 
       const dbUser = await response.json();
-      const userWithId = { ...newUser, id: dbUser.id };
-
-      // Fetch isochrone
-      const isochrone = await fetchIsochrone(userWithId);
-
-      // Update local state
-      const updatedUsers = [...users, userWithId];
-      const updatedIsochrones = [...isochrones, isochrone];
-
-      setUsers(updatedUsers);
-      setIsochrones(updatedIsochrones);
-      computeAndSetIntersection(updatedIsochrones);
+      // The realtime INSERT subscription is the single writer that appends the
+      // new participant (and computes its isochrone). Appending here as well
+      // duplicated it — the echo can even arrive before this response. So we
+      // only record that the new constraint is mine.
+      setMyUserId(dbUser.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId, users, isochrones, fetchIsochrone, computeAndSetIntersection]);
+  }, [sessionId]);
 
   const handleUpdateUser = useCallback(async (updatedUser: CommuteConstraint) => {
     setIsLoading(true);
@@ -479,11 +472,6 @@ export default function SessionPage() {
             onEditUser={handleEditUser}
             editingUserId={editingUser?.id}
             isLoading={isLoading}
-          />
-          <IdentityPicker
-            users={users}
-            value={myUserId}
-            onChange={handleIdentityChange}
           />
           <ShortlistPanel
             properties={properties}
