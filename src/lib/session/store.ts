@@ -4,7 +4,7 @@
 //
 // Grows one aggregate at a time. Currently: sessions, users, reactions.
 
-import { getSupabaseClient } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/server';
 import { CommuteConstraint } from '@/types/user';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
@@ -38,7 +38,7 @@ export type CommuteConstraintInput = Omit<CommuteConstraint, 'id'>;
 
 // A session, or NotFound if it doesn't exist.
 export async function getSession(id: string): Promise<SessionRow> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db.from('sessions').select('*').eq('id', id).single();
   if (error || !data) throw new NotFound('session', id);
   return data as unknown as SessionRow;
@@ -49,7 +49,7 @@ type MemberRow = { session_id: string; account_id: string; role: string };
 // Every session an account belongs to (created or was added to), newest activity
 // first, each with its members for avatars/labels.
 export async function listSessionsForAccount(accountId: string): Promise<SessionSummary[]> {
-  const db = getSupabaseClient();
+  const db = await createClient();
 
   const { data: mine, error: mineErr } = await db
     .from('session_members')
@@ -105,7 +105,7 @@ export async function listSessionsForAccount(accountId: string): Promise<Session
 // member.
 export async function createSession(accountId: string, name: string): Promise<SessionRow> {
   if (!name?.trim()) throw new Invalid('A session name is required');
-  const db = getSupabaseClient();
+  const db = await createClient();
 
   const { data, error } = await db
     .from('sessions')
@@ -131,7 +131,7 @@ export async function renameSession(
   name: string,
 ): Promise<SessionRow> {
   if (!name?.trim()) throw new Invalid('A session name is required');
-  const db = getSupabaseClient();
+  const db = await createClient();
 
   const { data: membership } = await db
     .from('session_members')
@@ -157,7 +157,7 @@ export async function addMember(
   accountId: string,
   role: 'owner' | 'member' = 'member',
 ): Promise<void> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { error } = await db
     .from('session_members')
     .upsert([{ session_id: sessionId, account_id: accountId, role }] as never, {
@@ -170,7 +170,7 @@ export async function addMember(
 // The shareable invite token for a session, for a member to hand out. Members
 // only — a non-member can't read or mint it.
 export async function getInviteToken(sessionId: string, accountId: string): Promise<string> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data: membership } = await db
     .from('session_members')
     .select('account_id')
@@ -191,7 +191,7 @@ export async function getInviteToken(sessionId: string, accountId: string): Prom
 // Join a session via its invite token (idempotent). NotFound if the token is
 // invalid. Returns the joined session.
 export async function joinSession(token: string, accountId: string): Promise<SessionRow> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db
     .from('sessions')
     .select('*')
@@ -206,7 +206,7 @@ export async function joinSession(token: string, accountId: string): Promise<Ses
 
 // Every participant in a session, oldest first, as domain constraints.
 export async function listUsers(sessionId: string): Promise<CommuteConstraint[]> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db
     .from('session_users')
     .select('*')
@@ -229,7 +229,7 @@ export async function getMyParticipant(
   sessionId: string,
   accountId: string,
 ): Promise<CommuteConstraint | null> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db
     .from('session_users')
     .select('*')
@@ -250,7 +250,7 @@ export async function addUser(
   input: CommuteConstraintInput,
 ): Promise<CommuteConstraint> {
   assertUserInput(input);
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db
     .from('session_users')
     .insert([{
@@ -277,7 +277,7 @@ export async function updateUser(
   input: CommuteConstraintInput,
 ): Promise<CommuteConstraint> {
   assertUserInput(input);
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db
     .from('session_users')
     .update({
@@ -299,7 +299,7 @@ export async function updateUser(
 
 // Remove a participant from the session.
 export async function removeUser(sessionId: string, userId: string): Promise<void> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { error } = await db
     .from('session_users')
     .delete()
@@ -310,7 +310,7 @@ export async function removeUser(sessionId: string, userId: string): Promise<voi
 
 // Every reaction in a session.
 export async function listReactions(sessionId: string): Promise<ListingReaction[]> {
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data, error } = await db
     .from('listing_reactions')
     .select('*')
@@ -331,7 +331,7 @@ export async function toggleReaction(
   if (!listingId || !userId) throw new Invalid('listingId and userId are required');
   if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or veto');
 
-  const db = getSupabaseClient();
+  const db = await createClient();
   const { data: existing, error: fetchError } = await db
     .from('listing_reactions')
     .select('*')

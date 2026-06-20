@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/server';
 import { computeFavorites } from '@/lib/favorites';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
@@ -13,7 +13,7 @@ export async function GET(
 ) {
   try {
     const { id: sessionId } = await params;
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const [reactionsRes, usersRes] = await Promise.all([
       supabase.from('listing_reactions').select('*').eq('session_id', sessionId),
