@@ -74,11 +74,17 @@ export default function DashboardPage() {
   }, [loadFiles, loadFolders]);
 
   useEffect(() => {
-    loadUsers();
-    loadMeeting();
-    loadFavorites();
-    loadFiles();
-    loadFolders();
+    // Initial load. Wrapped in an async IIFE so the setStates run in async
+    // callbacks (after each fetch resolves), not synchronously in the effect.
+    void (async () => {
+      await Promise.all([
+        loadUsers(),
+        loadMeeting(),
+        loadFavorites(),
+        loadFiles(),
+        loadFolders(),
+      ]);
+    })();
   }, [loadUsers, loadMeeting, loadFavorites, loadFiles, loadFolders]);
 
   // Live updates: refetch the (small) affected set when others change it.
