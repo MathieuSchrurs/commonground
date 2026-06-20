@@ -13,11 +13,23 @@ import { SessionUserRow, toCommuteConstraint } from './mappers';
 
 const REACTION_KINDS: ReactionKind[] = ['love', 'veto'];
 
-// A sessions row. The session itself carries no fields the UI reads beyond its
-// id; participants and the rest hang off it.
+// A sessions row — now with a human name and an owner account.
 export interface SessionRow {
   id: string;
+  name: string | null;
+  created_by: string | null;
   created_at?: string;
+  updated_at?: string;
+}
+
+// A session as it appears in an account's hub: name, the account's role, and a
+// glance at who else is in it.
+export interface SessionSummary {
+  id: string;
+  name: string | null;
+  role: string;
+  members: { id: string; name: string | null }[];
+  updatedAt: string | null;
 }
 
 // The fields needed to create or replace a participant — a CommuteConstraint
@@ -30,6 +42,128 @@ export async function getSession(id: string): Promise<SessionRow> {
   const { data, error } = await db.from('sessions').select('*').eq('id', id).single();
   if (error || !data) throw new NotFound('session', id);
   return data as unknown as SessionRow;
+}
+
+type MemberRow = { session_id: string; account_id: string; role: string };
+
+// Every session an account belongs to (created or was added to), newest activity
+// first, each with its members for avatars/labels.
+export async function listSessionsForAccount(accountId: string): Promise<SessionSummary[]> {
+  const db = getSupabaseClient();
+
+  const { data: mine, error: mineErr } = await db
+    .from('session_members')
+    .select('session_id, role')
+    .eq('account_id', accountId);
+  if (mineErr) throw mineErr;
+  const ids = ((mine ?? []) as { session_id: string; role: string }[]).map((m) => m.session_id);
+  if (ids.length === 0) return [];
+  const roleBySession = new Map(
+    ((mine ?? []) as { session_id: string; role: string }[]).map((m) => [m.session_id, m.role]),
+  );
+
+  const [{ data: sessions, error: sErr }, { data: members, error: memErr }] = await Promise.all([
+    db.from('sessions').select('id, name, updated_at').in('id', ids),
+    db.from('session_members').select('session_id, account_id, role').in('session_id', ids),
+  ]);
+  if (sErr) throw sErr;
+  if (memErr) throw memErr;
+
+  const memberRows = (members ?? []) as unknown as MemberRow[];
+  const accountIds = [...new Set(memberRows.map((m) => m.account_id))];
+  const { data: profiles, error: pErr } = await db
+    .from('profiles')
+    .select('id, display_name')
+    .in('id', accountIds);
+  if (pErr) throw pErr;
+  const nameByAccount = new Map(
+    ((profiles ?? []) as { id: string; display_name: string | null }[]).map((p) => [
+      p.id,
+      p.display_name,
+    ]),
+  );
+
+  const membersBySession = new Map<string, { id: string; name: string | null }[]>();
+  for (const m of memberRows) {
+    const arr = membersBySession.get(m.session_id) ?? [];
+    arr.push({ id: m.account_id, name: nameByAccount.get(m.account_id) ?? null });
+    membersBySession.set(m.session_id, arr);
+  }
+
+  return ((sessions ?? []) as unknown as SessionRow[])
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      role: roleBySession.get(s.id) ?? 'member',
+      members: membersBySession.get(s.id) ?? [],
+      updatedAt: s.updated_at ?? null,
+    }))
+    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+}
+
+// Create a named session owned by the account, with the creator as its first
+// member.
+export async function createSession(accountId: string, name: string): Promise<SessionRow> {
+  if (!name?.trim()) throw new Invalid('A session name is required');
+  const db = getSupabaseClient();
+
+  const { data, error } = await db
+    .from('sessions')
+    .insert([{ name: name.trim(), created_by: accountId }] as never)
+    .select()
+    .single();
+  if (error) throw error;
+  const session = data as unknown as SessionRow;
+
+  const { error: memErr } = await db
+    .from('session_members')
+    .insert([{ session_id: session.id, account_id: accountId, role: 'owner' }] as never);
+  if (memErr) throw memErr;
+
+  return session;
+}
+
+// Rename a session. The caller must be a member (creator-only is enforced in the
+// RLS issue #9).
+export async function renameSession(
+  sessionId: string,
+  accountId: string,
+  name: string,
+): Promise<SessionRow> {
+  if (!name?.trim()) throw new Invalid('A session name is required');
+  const db = getSupabaseClient();
+
+  const { data: membership } = await db
+    .from('session_members')
+    .select('account_id')
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .maybeSingle();
+  if (!membership) throw new NotFound('session', sessionId);
+
+  const { data, error } = await db
+    .from('sessions')
+    .update({ name: name.trim(), updated_at: new Date().toISOString() } as never)
+    .eq('id', sessionId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as SessionRow;
+}
+
+// Add an account to a session's membership (used by create and by invites, #7).
+export async function addMember(
+  sessionId: string,
+  accountId: string,
+  role: 'owner' | 'member' = 'member',
+): Promise<void> {
+  const db = getSupabaseClient();
+  const { error } = await db
+    .from('session_members')
+    .upsert([{ session_id: sessionId, account_id: accountId, role }] as never, {
+      onConflict: 'session_id,account_id',
+    });
+  if (error) throw error;
 }
 
 // Every participant in a session, oldest first, as domain constraints.

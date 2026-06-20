@@ -16,3 +16,11 @@ export class Invalid extends Error {
     this.name = 'Invalid';
   }
 }
+
+// The caller is not signed in (maps to 401).
+export class Unauthorized extends Error {
+  constructor(message = 'Sign in required') {
+    super(message);
+    this.name = 'Unauthorized';
+  }
+}
