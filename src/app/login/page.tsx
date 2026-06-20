@@ -12,10 +12,14 @@ export default function LoginPage() {
   const signInWithGoogle = async () => {
     setIsLoading(true);
     setError('');
+    // Carry ?next through OAuth so an invite link resumes after sign-in.
+    const next = new URLSearchParams(window.location.search).get('next') ?? '/';
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+      },
     });
     if (error) {
       setError(error.message);

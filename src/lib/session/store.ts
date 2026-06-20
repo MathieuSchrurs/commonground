@@ -167,6 +167,43 @@ export async function addMember(
   if (error) throw error;
 }
 
+// The shareable invite token for a session, for a member to hand out. Members
+// only — a non-member can't read or mint it.
+export async function getInviteToken(sessionId: string, accountId: string): Promise<string> {
+  const db = getSupabaseClient();
+  const { data: membership } = await db
+    .from('session_members')
+    .select('account_id')
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .maybeSingle();
+  if (!membership) throw new NotFound('session', sessionId);
+
+  const { data, error } = await db
+    .from('sessions')
+    .select('invite_token')
+    .eq('id', sessionId)
+    .single();
+  if (error || !data) throw new NotFound('session', sessionId);
+  return (data as unknown as { invite_token: string }).invite_token;
+}
+
+// Join a session via its invite token (idempotent). NotFound if the token is
+// invalid. Returns the joined session.
+export async function joinSession(token: string, accountId: string): Promise<SessionRow> {
+  const db = getSupabaseClient();
+  const { data, error } = await db
+    .from('sessions')
+    .select('*')
+    .eq('invite_token', token)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new NotFound('invite', token);
+  const session = data as unknown as SessionRow;
+  await addMember(session.id, accountId, 'member');
+  return session;
+}
+
 // Every participant in a session, oldest first, as domain constraints.
 export async function listUsers(sessionId: string): Promise<CommuteConstraint[]> {
   const db = getSupabaseClient();
