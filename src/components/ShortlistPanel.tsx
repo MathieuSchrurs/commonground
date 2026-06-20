@@ -5,6 +5,7 @@ import { ExternalLink, Heart, X } from 'lucide-react';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 import { CommuteConstraint } from '@/types/user';
+import { computeFavorites } from '@/lib/favorites';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
@@ -22,32 +23,10 @@ function formatPrice(price?: number): string {
 // The convergence view: every listing at least one person has hearted,
 // ranked by heart count, with unanimous picks called out.
 export default function ShortlistPanel({ properties, reactions, users }: ShortlistPanelProps) {
-  const shortlist = useMemo(() => {
-    const byListing = new Map<string, ListingReaction[]>();
-    for (const r of reactions) {
-      const arr = byListing.get(r.listing_id) ?? [];
-      arr.push(r);
-      byListing.set(r.listing_id, arr);
-    }
-
-    const nameOf = new Map(users.map(u => [u.id, u.name]));
-
-    return properties
-      .filter(p => p.id && byListing.get(p.id)?.some(r => r.reaction === 'love'))
-      .map(p => {
-        const rs = byListing.get(p.id!) ?? [];
-        const loves = rs.filter(r => r.reaction === 'love');
-        const vetoes = rs.filter(r => r.reaction === 'veto');
-        return {
-          listing: p,
-          loveCount: loves.length,
-          loveNames: loves.map(r => nameOf.get(r.user_id) ?? '?'),
-          vetoNames: vetoes.map(r => nameOf.get(r.user_id) ?? '?'),
-          unanimous: users.length > 1 && loves.length === users.length,
-        };
-      })
-      .sort((a, b) => b.loveCount - a.loveCount);
-  }, [properties, reactions, users]);
+  const shortlist = useMemo(
+    () => computeFavorites(properties, reactions, users),
+    [properties, reactions, users],
+  );
 
   if (shortlist.length === 0) return null;
 

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 
 interface IdentityPickerProps {
-  users: CommuteConstraint[];
+  users: Pick<CommuteConstraint, 'id' | 'name'>[];
   value: string | null;
   onChange: (userId: string) => void;
 }

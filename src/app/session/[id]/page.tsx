@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
@@ -12,7 +11,7 @@ import UserInputForm from '@/components/UserInputForm';
 import UserList from '@/components/UserList';
 import Map from '@/components/Map';
 import ZoneLegend from '@/components/ZoneLegend';
-import ShareLink from '@/components/ShareLink';
+import SessionHeader from '@/components/SessionHeader';
 import IdentityPicker from '@/components/IdentityPicker';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import { Button } from '@/components/ui/button';
@@ -179,7 +178,7 @@ export default function SessionPage() {
         }
 
         const { users: dbUsers } = await response.json();
-        
+
         const constraints = dbUsers.map(dbUserToConstraint);
         setUsers(constraints);
 
@@ -483,18 +482,7 @@ export default function SessionPage() {
     // Desktop: lock to viewport height so the map always fills to the bottom
     // and the sidebar scrolls internally. Mobile keeps normal page scrolling.
     <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-background flex flex-col">
-      <header className="border-b border-border bg-background/80 backdrop-blur">
-        <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2 group">
-            <div className="h-5 w-5 rounded-md bg-foreground transition-transform group-hover:scale-110" />
-            <span className="text-sm font-medium tracking-tight">CommonGround</span>
-            <span className="text-xs text-muted-foreground font-mono ml-2 hidden sm:inline">
-              {sessionId.slice(0, 8)}
-            </span>
-          </Link>
-          <ShareLink sessionId={sessionId} />
-        </div>
-      </header>
+      <SessionHeader sessionId={sessionId} />
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0">
         <aside className="border-r border-border overflow-y-auto p-4 space-y-4 bg-muted/20 min-h-0">
