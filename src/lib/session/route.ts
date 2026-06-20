@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Invalid, NotFound } from './errors';
+import { Invalid, NotFound, Unauthorized } from './errors';
 
 type Handler<Ctx> = (request: NextRequest, context: Ctx) => Promise<unknown>;
 
@@ -11,6 +11,9 @@ export function route<Ctx>(handler: Handler<Ctx>) {
     try {
       return NextResponse.json(await handler(request, context));
     } catch (error) {
+      if (error instanceof Unauthorized) {
+        return NextResponse.json({ error: error.message }, { status: 401 });
+      }
       if (error instanceof Invalid) {
         return NextResponse.json({ error: error.message }, { status: 400 });
       }

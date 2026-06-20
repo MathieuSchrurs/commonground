@@ -1,13 +1,17 @@
 import AccountBar from '@/components/AccountBar';
-import HomeClient from '@/components/HomeClient';
+import Hub from '@/components/Hub';
+import { getAccountId } from '@/lib/auth';
+import { listSessionsForAccount } from '@/lib/session/store';
 
-// The home page is gated by the proxy, so anyone here is signed in. Show who,
-// then the create / join UI. (Becomes the session hub in issue #5.)
-export default function Page() {
+// The session hub — gated by the proxy, so anyone here is signed in. Lists the
+// account's hunts and lets them name a new one.
+export default async function Page() {
+  const accountId = await getAccountId();
+  const sessions = accountId ? await listSessionsForAccount(accountId) : [];
   return (
     <>
       <AccountBar />
-      <HomeClient />
+      <Hub sessions={sessions} />
     </>
   );
 }

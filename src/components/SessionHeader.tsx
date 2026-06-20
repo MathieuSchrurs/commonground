@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ShareLink from '@/components/ShareLink';
@@ -15,6 +15,21 @@ export default function SessionHeader({ sessionId }: SessionHeaderProps) {
   const pathname = usePathname();
   const onDashboard = pathname?.endsWith('/dashboard') ?? false;
 
+  // Show the hunt's name in the bar (falls back to the short id while loading).
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/sessions/${sessionId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active && d?.session) setName(d.session.name ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [sessionId]);
+
   const tabs = [
     { label: 'Map', href: `/session/${sessionId}`, active: !onDashboard },
     { label: 'Dashboard', href: `/session/${sessionId}/dashboard`, active: onDashboard },
@@ -26,8 +41,8 @@ export default function SessionHeader({ sessionId }: SessionHeaderProps) {
         <Link href="/" className="flex items-center gap-2 group">
           <div className="h-5 w-5 rounded-md bg-foreground transition-transform group-hover:scale-110" />
           <span className="text-sm font-medium tracking-tight">CommonGround</span>
-          <span className="text-xs text-muted-foreground font-mono ml-2 hidden sm:inline">
-            {sessionId.slice(0, 8)}
+          <span className="text-xs text-muted-foreground ml-2 hidden sm:inline">
+            {name ?? sessionId.slice(0, 8)}
           </span>
         </Link>
 
