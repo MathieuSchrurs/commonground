@@ -11,9 +11,27 @@ lives in the review tooling, not here.
 
 **Session**:
 One group's shared house hunt — the aggregate everything else hangs off
-(commute constraints, reactions, shared files, folders, the meeting). Identified
-by an id in the URL; no login.
+(commute constraints, reactions, shared files, folders, the meeting). Has a
+human-readable `name` and a `created_by` owner; identified by an id in the URL.
+Access is gated by membership, not by knowing the URL.
 _Avoid_: room, group, room-code.
+
+**Account**:
+An authenticated person, backed by Supabase Auth (`auth.users`). The principal
+that signs in (Google, or email/password). Distinct from the in-session
+presence it owns (its commute constraint).
+_Avoid_: user, login, session_user.
+
+**Membership**:
+The link between an account and a session (`session_members`) — what "the
+sessions I created or belong to" is built from, and what an invite grants.
+_Avoid_: access, role, participant.
+
+**Profile**:
+An account's public face (display name, email, avatar) mirrored into `profiles`
+from `auth.users`, so names and avatars can be shown without touching the
+protected `auth` schema.
+_Avoid_: user, identity, account-detail.
 
 **Session store**:
 The single seam over every session-scoped table. Exposes domain verbs
@@ -24,8 +42,8 @@ _Avoid_: repository, DAO, service.
 
 **Commute constraint**:
 One participant's requirement — an address plus a time budget and transport mode
-— that produces an isochrone. Stored in `session_users`; the domain type is
-`CommuteConstraint`.
+— that produces an isochrone. Stored in `session_users` (the in-session presence
+of an account, via `account_id`); the domain type is `CommuteConstraint`.
 _Avoid_: user, member, person.
 
 ### Places
