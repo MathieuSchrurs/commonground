@@ -1,73 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/lib/supabase';
+import { route } from '@/lib/session/route';
+import { removeUser, updateUser } from '@/lib/session/store';
 
-// Update a user
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string; userId: string }> }
-) {
-  try {
-    const { id: sessionId, userId } = await params;
-    const body = await request.json();
-    const supabase = getSupabaseClient();
-    
-    const { name, address, latitude, longitude, maxMinutes, transportMode } = body;
+type Ctx = { params: Promise<{ id: string; userId: string }> };
 
-    const { data, error } = await supabase
-      .from('session_users')
-      .update({
-        name,
-        address,
-        latitude,
-        longitude,
-        max_minutes: maxMinutes,
-        transport_mode: transportMode,
-        updated_at: new Date().toISOString(),
-      } as never)
-      .eq('id', userId)
-      .eq('session_id', sessionId)
-      .select()
-      .single();
+// Replace a participant's commute constraint.
+export const PUT = route(async (req, { params }: Ctx) => {
+  const { id: sessionId, userId } = await params;
+  const input = await req.json();
+  return updateUser(sessionId, userId, input);
+});
 
-    if (error) {
-      throw error;
-    }
-
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error('Error updating user:', error);
-    return NextResponse.json(
-      { error: 'Failed to update user' },
-      { status: 500 }
-    );
-  }
-}
-
-// Delete a user
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string; userId: string }> }
-) {
-  try {
-    const { id: sessionId, userId } = await params;
-    const supabase = getSupabaseClient();
-
-    const { error } = await supabase
-      .from('session_users')
-      .delete()
-      .eq('id', userId)
-      .eq('session_id', sessionId);
-
-    if (error) {
-      throw error;
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting user:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete user' },
-      { status: 500 }
-    );
-  }
-}
+// Remove a participant from the session.
+export const DELETE = route(async (_req, { params }: Ctx) => {
+  const { id: sessionId, userId } = await params;
+  await removeUser(sessionId, userId);
+  return { success: true };
+});

@@ -1,48 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/lib/supabase';
+import { route } from '@/lib/session/route';
+import { getSession, listUsers } from '@/lib/session/store';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const supabase = getSupabaseClient();
-    
-    // Get session with all users
-    const { data: session, error: sessionError } = await supabase
-      .from('sessions')
-      .select('*')
-      .eq('id', id)
-      .single();
+type Ctx = { params: Promise<{ id: string }> };
 
-    if (sessionError) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
-    }
-
-    // Get all users in this session
-    const { data: users, error: usersError } = await supabase
-      .from('session_users')
-      .select('*')
-      .eq('session_id', id)
-      .order('created_at', { ascending: true });
-
-    if (usersError) {
-      throw usersError;
-    }
-
-    return NextResponse.json({
-      session,
-      users: users || []
-    });
-  } catch (error) {
-    console.error('Error fetching session:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch session' },
-      { status: 500 }
-    );
-  }
-}
+// A session with its participants. 404 if the session doesn't exist.
+export const GET = route(async (_req, { params }: Ctx) => {
+  const { id } = await params;
+  const session = await getSession(id);
+  const users = await listUsers(id);
+  return { session, users };
+});

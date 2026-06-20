@@ -16,28 +16,7 @@ import IdentityPicker from '@/components/IdentityPicker';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import { Button } from '@/components/ui/button';
 import { computeIntersection, calculateArea } from '@/lib/geo';
-
-// Database user type
-interface DbUser {
-  id: string;
-  name: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  max_minutes: number;
-  transport_mode: 'driving' | 'cycling';
-}
-
-// Convert DB user to CommuteConstraint
-const dbUserToConstraint = (dbUser: DbUser): CommuteConstraint => ({
-  id: dbUser.id,
-  name: dbUser.name,
-  address: dbUser.address,
-  latitude: dbUser.latitude,
-  longitude: dbUser.longitude,
-  maxMinutes: dbUser.max_minutes,
-  transportMode: dbUser.transport_mode,
-});
+import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
 
 export default function SessionPage() {
   const params = useParams();
@@ -177,9 +156,8 @@ export default function SessionPage() {
           throw new Error('Failed to load session');
         }
 
-        const { users: dbUsers } = await response.json();
-
-        const constraints = dbUsers.map(dbUserToConstraint);
+        // The store returns participants already as CommuteConstraints.
+        const { users: constraints } = await response.json() as { users: CommuteConstraint[] };
         setUsers(constraints);
 
         // Fetch isochrones for all users
@@ -251,8 +229,10 @@ export default function SessionPage() {
             return;
           }
 
-          // INSERT or UPDATE — only fetch the one changed isochrone
-          const constraint = dbUserToConstraint(payload.new as DbUser);
+          // INSERT or UPDATE — only fetch the one changed isochrone.
+          // Realtime payloads arrive as raw snake_case rows, so they still need
+          // the shared mapper (they never pass through the store).
+          const constraint = toCommuteConstraint(payload.new as SessionUserRow);
 
           // Our own inserts already landed in local state via handleAddUser;
           // the realtime echo of that insert must not append a duplicate.
