@@ -5,7 +5,12 @@ import { NextResponse, type NextRequest } from 'next/server';
 // API routes, the cron endpoint) passes through — the session is still
 // refreshed on every request; only these paths redirect when logged out.
 function isProtectedPage(pathname: string): boolean {
-  return pathname === '/' || pathname.startsWith('/session') || pathname.startsWith('/join');
+  return (
+    pathname === '/' ||
+    pathname.startsWith('/session') ||
+    pathname.startsWith('/join') ||
+    pathname.startsWith('/admin')
+  );
 }
 
 // Refresh the auth session on every request (writing rotated cookies back) and
