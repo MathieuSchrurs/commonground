@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/client';
 import { Meeting } from '@/types/meeting';
 import { SharedFile, Folder } from '@/types/files';
 import { Favorite } from '@/lib/favorites';
@@ -19,6 +19,10 @@ interface SessionUser {
 export default function DashboardPage() {
   const params = useParams();
   const sessionId = params.id as string;
+
+  // Authenticated browser client so RLS-aware realtime delivers this session's
+  // changes (the anon client sees nothing under RLS).
+  const [supabase] = useState(() => createClient());
 
   const [users, setUsers] = useState<SessionUser[]>([]);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
@@ -95,7 +99,7 @@ export default function DashboardPage() {
         () => loadFavorites())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadFavorites]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadFavorites, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {

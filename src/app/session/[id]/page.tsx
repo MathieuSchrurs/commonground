@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/client';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import UserInputForm from '@/components/UserInputForm';
@@ -21,6 +21,10 @@ export default function SessionPage() {
   const params = useParams();
   const router = useRouter();
   const sessionId = params.id as string;
+
+  // Authenticated browser client — carries the user's JWT so RLS-aware realtime
+  // delivers this session's changes (the anon client sees nothing under RLS).
+  const [supabase] = useState(() => createClient());
 
   const [users, setUsers] = useState<CommuteConstraint[]>([]);
   const [isochrones, setIsochrones] = useState<Feature<Polygon | MultiPolygon>[]>([]);
@@ -98,7 +102,7 @@ export default function SessionPage() {
       )
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadReactions]);
+  }, [sessionId, loadReactions, supabase]);
 
   const handleToggleReaction = useCallback(async (listingId: string, reaction: ReactionKind) => {
     if (!myUserId) return;
@@ -266,7 +270,7 @@ export default function SessionPage() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [sessionId, fetchIsochrone, computeAndSetIntersection]);
+  }, [sessionId, fetchIsochrone, computeAndSetIntersection, supabase]);
 
   const handleAddUser = useCallback(async (newUser: CommuteConstraint) => {
     setIsLoading(true);
@@ -293,17 +297,29 @@ export default function SessionPage() {
       }
 
       const dbUser = await response.json();
-      // The realtime INSERT subscription is the single writer that appends the
-      // new participant (and computes its isochrone). Appending here as well
-      // duplicated it — the echo can even arrive before this response. So we
-      // only record that the new constraint is mine.
-      setMyUserId(dbUser.id);
+      const userWithId = { ...newUser, id: dbUser.id };
+      // The constraint I just added is mine — that's now "who I am".
+      setMyUserId(userWithId.id);
+
+      // Show it immediately (don't wait on the realtime echo, which may be
+      // delayed or — under RLS — not delivered if realtime auth lags). The
+      // INSERT handler and this both guard on presence, so no duplicate.
+      if (!usersRef.current.some((u) => u.id === userWithId.id)) {
+        const isochrone = await fetchIsochrone(userWithId);
+        if (!usersRef.current.some((u) => u.id === userWithId.id)) {
+          const updatedUsers = [...usersRef.current, userWithId];
+          const updatedIsochrones = [...isochronesRef.current, isochrone];
+          setUsers(updatedUsers);
+          setIsochrones(updatedIsochrones);
+          computeAndSetIntersection(updatedIsochrones);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, fetchIsochrone, computeAndSetIntersection]);
 
   const handleUpdateUser = useCallback(async (updatedUser: CommuteConstraint) => {
     setIsLoading(true);
