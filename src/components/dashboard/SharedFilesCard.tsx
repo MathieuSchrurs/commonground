@@ -3,7 +3,7 @@
 import React, { useRef, useState } from 'react';
 import { FileText, Folder as FolderIcon, FolderPlus, Trash2, Upload, ExternalLink } from 'lucide-react';
 import { SharedFile, Folder } from '@/types/files';
-import { getSupabaseClient } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,7 +30,7 @@ function formatSize(bytes: number | null): string {
 }
 
 function publicUrl(path: string): string {
-  return getSupabaseClient().storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+  return createClient().storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
 export default function SharedFilesCard({
@@ -58,7 +58,7 @@ export default function SharedFilesCard({
     if (!fileList || fileList.length === 0) return;
     setUploading(true);
     setError('');
-    const supabase = getSupabaseClient();
+    const supabase = createClient();
     try {
       for (const file of Array.from(fileList)) {
         const path = `${sessionId}/${crypto.randomUUID()}-${file.name}`;

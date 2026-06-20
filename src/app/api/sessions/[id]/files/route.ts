@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/server';
 
 // All shared files for a session, newest first.
 export async function GET(
@@ -8,7 +8,7 @@ export async function GET(
 ) {
   try {
     const { id: sessionId } = await params;
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const { data, error } = await supabase
       .from('shared_files')
@@ -43,7 +43,7 @@ export async function POST(
       );
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const { data, error } = await supabase
       .from('shared_files')

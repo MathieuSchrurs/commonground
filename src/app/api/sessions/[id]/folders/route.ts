@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/server';
 
 // All folders for a session, oldest first (stable display order).
 export async function GET(
@@ -8,7 +8,7 @@ export async function GET(
 ) {
   try {
     const { id: sessionId } = await params;
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const { data, error } = await supabase
       .from('session_folders')
@@ -38,7 +38,7 @@ export async function POST(
       return NextResponse.json({ error: 'A folder name is required' }, { status: 400 });
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const { data, error } = await supabase
       .from('session_folders')

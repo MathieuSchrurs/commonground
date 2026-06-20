@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/server';
 
 // Move a file to a folder (folderId: null = back to the root).
 export async function PATCH(
@@ -9,7 +9,7 @@ export async function PATCH(
   try {
     const { id: sessionId, fileId } = await params;
     const { folderId } = await request.json();
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const { data, error } = await supabase
       .from('shared_files')
@@ -35,7 +35,7 @@ export async function DELETE(
 ) {
   try {
     const { id: sessionId, fileId } = await params;
-    const supabase = getSupabaseClient();
+    const supabase = await createClient();
 
     const { data: file, error: fetchError } = await supabase
       .from('shared_files')
