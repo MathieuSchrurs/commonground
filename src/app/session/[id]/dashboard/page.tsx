@@ -7,7 +7,6 @@ import { Meeting } from '@/types/meeting';
 import { SharedFile, Folder } from '@/types/files';
 import { Favorite } from '@/lib/favorites';
 import SessionHeader from '@/components/SessionHeader';
-import IdentityPicker from '@/components/IdentityPicker';
 import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
 import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
 import SharedFilesCard from '@/components/dashboard/SharedFilesCard';
@@ -28,14 +27,12 @@ export default function DashboardPage() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
 
-  // Identity is shared with the map page — same localStorage key per session.
+  // "Who am I" is the participant linked to the signed-in account.
   useEffect(() => {
-    setMyUserId(localStorage.getItem(`commonground:me:${sessionId}`));
-  }, [sessionId]);
-
-  const handleIdentityChange = useCallback((userId: string) => {
-    setMyUserId(userId);
-    localStorage.setItem(`commonground:me:${sessionId}`, userId);
+    fetch(`/api/sessions/${sessionId}/me`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMyUserId(d?.participant?.id ?? null))
+      .catch(() => {});
   }, [sessionId]);
 
   const loadUsers = useCallback(async () => {
@@ -120,9 +117,6 @@ export default function DashboardPage() {
       <SessionHeader sessionId={sessionId} />
 
       <main className="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 py-6 space-y-4">
-        {users.length > 0 && (
-          <IdentityPicker users={users} value={myUserId} onChange={handleIdentityChange} />
-        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <NextMeetingCard meeting={meeting} canEdit={!!myUserId} onSave={handleSaveMeeting} />

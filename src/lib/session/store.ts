@@ -162,6 +162,7 @@ export async function addMember(
     .from('session_members')
     .upsert([{ session_id: sessionId, account_id: accountId, role }] as never, {
       onConflict: 'session_id,account_id',
+      ignoreDuplicates: true, // don't downgrade an existing owner to member
     });
   if (error) throw error;
 }
@@ -185,9 +186,30 @@ function assertUserInput(input: CommuteConstraintInput): void {
   }
 }
 
-// Add a participant to the session.
+// The signed-in account's own participant in a session, or null if they haven't
+// added their commute constraint yet. This is "who am I" — no dropdown pick.
+export async function getMyParticipant(
+  sessionId: string,
+  accountId: string,
+): Promise<CommuteConstraint | null> {
+  const db = getSupabaseClient();
+  const { data, error } = await db
+    .from('session_users')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toCommuteConstraint(data as unknown as SessionUserRow) : null;
+}
+
+// Add the signed-in account's commute constraint to the session. Stamps
+// account_id so the constraint is owned, and makes the account a member.
 export async function addUser(
   sessionId: string,
+  accountId: string,
   input: CommuteConstraintInput,
 ): Promise<CommuteConstraint> {
   assertUserInput(input);
@@ -196,6 +218,7 @@ export async function addUser(
     .from('session_users')
     .insert([{
       session_id: sessionId,
+      account_id: accountId,
       name: input.name,
       address: input.address,
       latitude: input.latitude,
@@ -206,6 +229,7 @@ export async function addUser(
     .select()
     .single();
   if (error) throw error;
+  await addMember(sessionId, accountId, 'member');
   return toCommuteConstraint(data as unknown as SessionUserRow);
 }
 

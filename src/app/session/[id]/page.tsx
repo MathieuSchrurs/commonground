@@ -12,7 +12,6 @@ import UserList from '@/components/UserList';
 import Map from '@/components/Map';
 import ZoneLegend from '@/components/ZoneLegend';
 import SessionHeader from '@/components/SessionHeader';
-import IdentityPicker from '@/components/IdentityPicker';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import { Button } from '@/components/ui/button';
 import { computeIntersection, calculateArea } from '@/lib/geo';
@@ -44,14 +43,12 @@ export default function SessionPage() {
   useEffect(() => { usersRef.current = users; }, [users]);
   useEffect(() => { isochronesRef.current = isochrones; }, [isochrones]);
 
-  // Identity ("who am I") is per browser, per session — no login needed
+  // "Who am I" is the participant linked to the signed-in account — no picking.
   useEffect(() => {
-    setMyUserId(localStorage.getItem(`commonground:me:${sessionId}`));
-  }, [sessionId]);
-
-  const handleIdentityChange = useCallback((userId: string) => {
-    setMyUserId(userId);
-    localStorage.setItem(`commonground:me:${sessionId}`, userId);
+    fetch(`/api/sessions/${sessionId}/me`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMyUserId(d?.participant?.id ?? null))
+      .catch(() => {});
   }, [sessionId]);
 
   // Snapshot of the previous visit's timestamp, taken once per page load.
@@ -294,6 +291,8 @@ export default function SessionPage() {
 
       const dbUser = await response.json();
       const userWithId = { ...newUser, id: dbUser.id };
+      // The constraint I just added is mine — that's now "who I am".
+      setMyUserId(userWithId.id);
 
       // Fetch isochrone
       const isochrone = await fetchIsochrone(userWithId);
@@ -479,11 +478,6 @@ export default function SessionPage() {
             onEditUser={handleEditUser}
             editingUserId={editingUser?.id}
             isLoading={isLoading}
-          />
-          <IdentityPicker
-            users={users}
-            value={myUserId}
-            onChange={handleIdentityChange}
           />
           <ShortlistPanel
             properties={properties}
