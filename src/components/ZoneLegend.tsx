@@ -14,7 +14,7 @@ interface ZoneLegendProps {
   isScraping?: boolean;
   scrapeCompleted?: boolean;
   scrapeError?: string;
-  onFindProperties?: (force: boolean) => void;
+  onFindProperties?: () => void;
 }
 
 export default function ZoneLegend({
@@ -51,7 +51,7 @@ export default function ZoneLegend({
             {onFindProperties && (
               <div className="mt-3 space-y-2">
                 <Button
-                  onClick={() => onFindProperties(propertiesCount > 0)}
+                  onClick={() => onFindProperties()}
                   disabled={isScraping}
                   size="sm"
                   variant={propertiesCount > 0 ? 'outline' : 'default'}
