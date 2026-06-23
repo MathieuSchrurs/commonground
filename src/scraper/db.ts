@@ -165,7 +165,14 @@ export async function deleteStaleListings(
 
 /**
  * Fetch all listings within a bounding box that have coordinates.
+ *
+ * Supabase/PostgREST caps a single response at 1000 rows, so a busy zone
+ * (we routinely store 1000+ listings per zone) would silently lose the rest.
+ * Page through with .range() until a short page signals the end. A stable
+ * .order('id') is required — without it, range windows can overlap or skip.
  */
+const PAGE_SIZE = 1000;
+
 export async function fetchListingsInBbox(
   minLng: number,
   minLat: number,
@@ -173,16 +180,27 @@ export async function fetchListingsInBbox(
   maxLat: number
 ): Promise<PropertyListing[]> {
   const supabase = getClient();
-  const { data, error } = await supabase
-    .from('property_listings')
-    .select('*')
-    .gte('longitude', minLng)
-    .lte('longitude', maxLng)
-    .gte('latitude', minLat)
-    .lte('latitude', maxLat)
-    .not('latitude', 'is', null)
-    .not('longitude', 'is', null);
+  const all: PropertyListing[] = [];
 
-  if (error) throw new Error(`Supabase fetch error: ${error.message}`);
-  return (data ?? []) as PropertyListing[];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('property_listings')
+      .select('*')
+      .gte('longitude', minLng)
+      .lte('longitude', maxLng)
+      .gte('latitude', minLat)
+      .lte('latitude', maxLat)
+      .not('latitude', 'is', null)
+      .not('longitude', 'is', null)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw new Error(`Supabase fetch error: ${error.message}`);
+
+    const page = (data ?? []) as PropertyListing[];
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+
+  return all;
 }
