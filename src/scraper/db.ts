@@ -2,10 +2,15 @@ import { createClient } from '@supabase/supabase-js';
 import { PropertyListing } from './types';
 import { annotatePriceChanges, ExistingPriceRow } from './price-changes';
 
+// The scraper reads and writes the shared listing pool from server-side jobs
+// (the daily cron and /api/scrape). It uses the service-role key so RLS can't
+// hide rows or block upserts — there is no signed-in user in these contexts.
 function getClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) throw new Error('Missing Supabase env variables');
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY (or NEXT_PUBLIC_SUPABASE_URL) for scraper DB access');
+  }
   return createClient(url, key);
 }
 

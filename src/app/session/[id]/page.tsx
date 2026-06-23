@@ -17,6 +17,24 @@ import { Button } from '@/components/ui/button';
 import { computeIntersection, calculateArea } from '@/lib/geo';
 import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
 
+type ScrapeResponse = { listings?: PropertyListing[]; count?: number; error?: string };
+
+// Read /api/scrape's response defensively. A serverless function that exceeds
+// Vercel's time limit is killed by the platform, which returns an HTML 504 page
+// — and res.json() on HTML throws a cryptic "unexpected character at line 1
+// column 1". This turns that (and any non-JSON body) into a clear message.
+async function readScrapeResponse(res: Response): Promise<ScrapeResponse> {
+  const text = await res.text();
+  try {
+    return text ? (JSON.parse(text) as ScrapeResponse) : {};
+  } catch {
+    if (res.status === 504) {
+      throw new Error('The server took too long and timed out — try again in a moment.');
+    }
+    throw new Error(`Unexpected response from the server (HTTP ${res.status}).`);
+  }
+}
+
 export default function SessionPage() {
   const params = useParams();
   const router = useRouter();
@@ -404,18 +422,22 @@ export default function SessionPage() {
     setError('');
   }, []);
 
-  const handleFindProperties = useCallback(async (force = false) => {
+  const handleFindProperties = useCallback(async () => {
     if (!intersection) return;
     setIsScraping(true);
     setScrapeError('');
     setScrapeCompleted(false);
     try {
+      // cacheOnly: never scrape live from the browser. On Vercel's Hobby plan a
+      // full scrape+geocode blows past the 60s function limit and the platform
+      // kills it with a 504. The scheduled scraper keeps the cache warm; this
+      // button just reads what's already stored, so it always returns instantly.
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ polygon: intersection, force }),
+        body: JSON.stringify({ polygon: intersection, cacheOnly: true }),
       });
-      const data = await res.json();
+      const data = await readScrapeResponse(res);
       console.log('[FindProperties] API response:', data);
       if (!res.ok) {
         throw new Error(data.error || 'Failed to fetch properties');
@@ -442,9 +464,9 @@ export default function SessionPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ polygon: intersection, cacheOnly: true }),
         });
-        const data = await res.json();
+        const data = await readScrapeResponse(res);
         if (res.ok && (data.listings?.length ?? 0) > 0) {
-          applyListings(data.listings);
+          applyListings(data.listings!);
           setScrapeCompleted(true);
         }
       } catch {
