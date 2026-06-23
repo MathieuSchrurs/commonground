@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import * as turf from '@turf/turf';
-import { getSupabaseClient } from '@/lib/supabase';
+import { getServiceRoleClient } from '@/lib/supabase';
 import { getIsochrone } from '@/lib/mapbox';
 import { computeIntersection } from '@/lib/geo';
 import { refreshListingsForPolygon } from '@/scraper/refresh';
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
   }
 
   const runStartedAt = new Date().toISOString();
-  const supabase = getSupabaseClient();
+  const supabase = getServiceRoleClient();
 
   const { data, error } = await supabase
     .from('session_users')
