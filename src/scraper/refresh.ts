@@ -6,7 +6,7 @@ import { scrapeZimmo } from './zimmo';
 import { scrapeImmovlan } from './immovlan';
 import { scrapeImmoscoop } from './immoscoop';
 import { geocodeAddress } from './geocode';
-import { discoverAreas } from './areas';
+import { discoverAreas, Area } from './areas';
 import { upsertListings, deleteStaleListings, fetchKnownLocations } from './db';
 import { PropertyListing } from './types';
 
@@ -36,6 +36,14 @@ export interface RefreshOptions {
    * Omitted = each scraper's own default (8 towns / 6 cities).
    */
   maxAreas?: number;
+  /**
+   * Pre-discovered postal areas. When set, refresh skips its own grid-sampling
+   * of the polygon — the crawler discovers areas per session zone (each compact
+   * and reliably sampled) and passes the deduped union here, since sampling one
+   * sprawling multi-zone polygon misses the gaps. The polygon is still used for
+   * the stale-purge bounding box.
+   */
+  areas?: Area[];
 }
 
 // A listing not seen by any scrape for this long is presumed sold/delisted.
@@ -67,7 +75,7 @@ export async function refreshListingsForPolygon(
   const [minLng, minLat, maxLng, maxLat] = turf.bbox(polygon);
   const scrapeStartedAt = new Date().toISOString();
 
-  const areas = await discoverAreas(polygon, mapboxToken);
+  const areas = options.areas ?? await discoverAreas(polygon, mapboxToken);
 
   const handleFailure = (name: string) => (err: unknown): ScrapeResult => {
     console.error(`[refresh] ${name} threw:`, err);

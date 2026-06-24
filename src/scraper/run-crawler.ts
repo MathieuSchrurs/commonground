@@ -26,7 +26,7 @@ config({ path: resolve(process.cwd(), '.env.local') });
 import { createClient } from '@supabase/supabase-js';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { computeIntersection, unionPolygons } from '../lib/geo';
-import { discoverAreas } from './areas';
+import { discoverAreas, Area } from './areas';
 import { refreshListingsForPolygon, RefreshOptions, SourceName } from './refresh';
 
 type Mode = 'free' | 'zimmo' | 'all';
@@ -74,12 +74,24 @@ async function fetchIsochrone(
   return (data.features?.[0] as Feature<Polygon | MultiPolygon>) ?? null;
 }
 
-// Fold every active session into one search polygon: per session, intersect its
-// members' commute isochrones (the zone they all reach), then union the zones.
-async function buildSearchZone(): Promise<Feature<Polygon | MultiPolygon> | null> {
+interface SearchPlan {
+  /** Union of all session zones — used only for the stale-purge bounding box. */
+  zone: Feature<Polygon | MultiPolygon>;
+  /** Deduped postal areas discovered across the individual session zones. */
+  areas: Area[];
+}
+
+// Fold every active session into a search plan: per session, intersect its
+// members' commute isochrones (the zone they all reach), discover that zone's
+// postal areas, and dedupe across sessions. Areas are discovered per zone (not
+// on the union) because grid-sampling one sprawling multi-zone polygon misses
+// the gaps between scattered sessions.
+async function buildSearchPlan(): Promise<SearchPlan | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const mapboxToken = process.env.MAPBOX_SECRET_TOKEN;
   if (!url || !key) throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+  if (!mapboxToken) throw new Error('MAPBOX_SECRET_TOKEN is not set');
 
   const supabase = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -99,6 +111,7 @@ async function buildSearchZone(): Promise<Feature<Polygon | MultiPolygon> | null
   console.log(`[crawler] ${bySession.size} active session(s)`);
 
   const zones: Feature<Polygon | MultiPolygon>[] = [];
+  const areasByCode = new Map<string, Area>();
   for (const [sessionId, users] of bySession) {
     const isochrones = (
       await Promise.all(
@@ -117,9 +130,14 @@ async function buildSearchZone(): Promise<Feature<Polygon | MultiPolygon> | null
       continue;
     }
     zones.push(zone);
+    for (const a of await discoverAreas(zone, mapboxToken)) {
+      if (!areasByCode.has(a.postalCode)) areasByCode.set(a.postalCode, a);
+    }
   }
 
-  return unionPolygons(zones);
+  const union = unionPolygons(zones);
+  if (!union) return null;
+  return { zone: union, areas: [...areasByCode.values()] };
 }
 
 async function main() {
@@ -137,18 +155,15 @@ async function main() {
 
   console.log(`\n=== CommonGround crawler — mode: ${mode}${plan ? ' (plan only)' : ''} ===\n`);
 
-  const zone = await buildSearchZone();
-  if (!zone) {
+  const searchPlan = await buildSearchPlan();
+  if (!searchPlan || searchPlan.areas.length === 0) {
     console.log('[crawler] No search zone (no active sessions with a common zone). Nothing to do.');
     return;
   }
 
   if (plan) {
-    const mapboxToken = process.env.MAPBOX_SECRET_TOKEN;
-    if (!mapboxToken) throw new Error('MAPBOX_SECRET_TOKEN is not set');
-    const areas = await discoverAreas(zone, mapboxToken);
-    console.log(`\n[crawler] PLAN: would scrape ${areas.length} area(s) in mode "${mode}":`);
-    console.log(areas.map(a => `  ${a.postalCode} ${a.city} (${a.citySlug})`).join('\n'));
+    console.log(`\n[crawler] PLAN: would scrape ${searchPlan.areas.length} area(s) in mode "${mode}":`);
+    console.log(searchPlan.areas.map(a => `  ${a.postalCode} ${a.city} (${a.citySlug})`).join('\n'));
     return;
   }
 
@@ -161,7 +176,12 @@ async function main() {
     zimmo: zimmoPages,
   };
 
-  const summary = await refreshListingsForPolygon(zone, { sources, pages, maxAreas: DEEP_MAX_AREAS });
+  const summary = await refreshListingsForPolygon(searchPlan.zone, {
+    sources,
+    pages,
+    maxAreas: DEEP_MAX_AREAS,
+    areas: searchPlan.areas,
+  });
 
   console.log('\n=== Crawl complete ===');
   console.log(`Areas: ${summary.areas} | Upserted: ${summary.upserted}`);
