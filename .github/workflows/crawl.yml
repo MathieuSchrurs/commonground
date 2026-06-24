@@ -25,7 +25,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 22+ has a native global WebSocket; @supabase/supabase-js needs it
+          # at construction time (Node 20 throws).
+          node-version: '22'
           cache: npm
 
       - run: npm ci
