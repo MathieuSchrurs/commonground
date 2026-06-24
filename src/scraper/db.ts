@@ -14,6 +14,23 @@ function getClient() {
   return createClient(url, key);
 }
 
+// price, bedrooms, surface_area and land_area are BIGINT columns. A source that
+// parses a fractional value (e.g. Realo reading "€ 415.580,07" as 415580.07)
+// would make Postgres reject the whole upsert batch ("invalid input syntax for
+// type bigint"). Round these to integers defensively so one odd listing can't
+// sink an entire crawl.
+export function roundIntegerFields(l: PropertyListing): PropertyListing {
+  const round = (v: number | undefined) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v;
+  return {
+    ...l,
+    price: round(l.price),
+    bedrooms: round(l.bedrooms),
+    surface_area: round(l.surface_area),
+    land_area: round(l.land_area),
+  };
+}
+
 // .in() filters go into the request URI; too many ids exceeds the server's
 // URI length limit, so large key lookups must be chunked.
 const IN_CHUNK_SIZE = 200;
@@ -36,7 +53,7 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
   // Postgres rejects an upsert batch where two rows share the conflict key,
   // so collapse duplicates on (source, external_id) — last occurrence wins.
   const deduped = Array.from(
-    new Map(listings.map((l) => [`${l.source}:${l.external_id}`, l])).values()
+    new Map(listings.map((l) => [`${l.source}:${l.external_id}`, roundIntegerFields(l)])).values()
   );
 
   const supabase = getClient();
