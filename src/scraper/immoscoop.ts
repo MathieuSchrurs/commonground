@@ -5,7 +5,8 @@ import { mapPropertyType, scrapePaginated, dedupeById } from './common';
 
 const BASE_URL = 'https://www.immoscoop.be/zoeken/te-koop';
 
-// Cities scraped per run; each costs maxPages requests
+// Default cities scraped per run; each costs maxPages requests. The unbounded
+// crawler raises this via the maxCities arg to cover the whole search zone.
 const MAX_CITIES = 6;
 
 function parsePrice(raw: string): number | undefined {
@@ -69,9 +70,10 @@ export function parseCards(html: string): PropertyListing[] {
 // query-param variants silently return unfiltered national results.
 export async function scrapeImmoscoop(
   areas: Area[],
-  maxPages = 3
+  maxPages = 3,
+  maxCities = MAX_CITIES
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  const citySlugs = [...new Set(areas.map(a => a.citySlug).filter(Boolean))].slice(0, MAX_CITIES);
+  const citySlugs = [...new Set(areas.map(a => a.citySlug).filter(Boolean))].slice(0, maxCities);
   if (citySlugs.length === 0) return { listings: [], blocked: false };
   console.log(`[ImmoScoop] Starting scrape — cities: ${citySlugs.join(', ')}, ${maxPages} pages each`);
 

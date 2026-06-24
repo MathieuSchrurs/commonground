@@ -45,6 +45,27 @@ export function computeIntersection(
 }
 
 /**
+ * Merge several polygons into one (their geographic OR). The crawler uses this
+ * to fold every session's commute zone into a single search area, so each
+ * listing source is scraped once over the union rather than per session.
+ * Returns null for an empty list; passes a single polygon straight through.
+ */
+export function unionPolygons(
+  polygons: Feature<Polygon | MultiPolygon>[]
+): Feature<Polygon | MultiPolygon> | null {
+  if (polygons.length === 0) return null;
+
+  let merged = polygons[0];
+  for (let i = 1; i < polygons.length; i++) {
+    const result = turf.union(turf.featureCollection([merged, polygons[i]]));
+    // turf.union returns null only for degenerate input; keep the accumulator
+    // so one bad polygon can't drop the whole union.
+    if (result) merged = result as Feature<Polygon | MultiPolygon>;
+  }
+  return merged;
+}
+
+/**
  * Calculate the area of a polygon in square kilometers
  */
 export function calculateArea(

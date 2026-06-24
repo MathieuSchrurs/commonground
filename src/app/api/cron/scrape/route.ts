@@ -23,8 +23,13 @@ interface SessionUserRow {
 }
 
 /**
- * Daily cron (see vercel.json): for every active session, recompute the
- * commute intersection and refresh the listings inside it. Because
+ * Legacy scrape endpoint — no longer on a schedule. The daily/weekly crawl now
+ * runs in GitHub Actions (.github/workflows/crawl.yml → src/scraper/run-crawler.ts),
+ * which has no 300s limit and covers the union of all sessions deeply. This
+ * route is kept as an auth-gated manual fallback (shallow, top-3 sessions).
+ *
+ * For every active session, recompute the commute intersection and refresh the
+ * listings inside it. Because
  * first_seen_at is only set on insert, anything that shows up here for the
  * first time will carry today's timestamp — which is what the UI uses to
  * badge listings as NEW.

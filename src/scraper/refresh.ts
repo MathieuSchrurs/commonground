@@ -12,6 +12,32 @@ import { PropertyListing } from './types';
 
 type ScrapeResult = { listings: PropertyListing[]; blocked: boolean };
 
+export type SourceName = 'realo' | 'immoweb' | 'zimmo' | 'immovlan' | 'immoscoop';
+
+const ALL_SOURCES: SourceName[] = ['realo', 'immoweb', 'zimmo', 'immovlan', 'immoscoop'];
+
+// Shallow page caps — the Vercel cron path used these to stay inside 300s.
+// The unbounded GitHub Actions crawler overrides them via RefreshOptions.pages.
+const SHALLOW_PAGES: Record<SourceName, number> = {
+  realo: 2,
+  immoweb: 3,
+  zimmo: 2,
+  immovlan: 2,
+  immoscoop: 3,
+};
+
+export interface RefreshOptions {
+  /** Which sources to scrape. Defaults to all five. */
+  sources?: SourceName[];
+  /** Per-source page caps; falls back to the shallow default per source. */
+  pages?: Partial<Record<SourceName, number>>;
+  /**
+   * Breadth cap for the town/city-filtered sources (Immovlan, ImmoScoop).
+   * Omitted = each scraper's own default (8 towns / 6 cities).
+   */
+  maxAreas?: number;
+}
+
 // A listing not seen by any scrape for this long is presumed sold/delisted.
 // Purging per-scrape would be wrong: scrapers paginate newest-first, so an
 // older listing missing from page 1-3 is usually still for sale.
@@ -32,7 +58,8 @@ export interface RefreshSummary {
  * listings unseen for a week. Shared by /api/scrape and the daily cron.
  */
 export async function refreshListingsForPolygon(
-  polygon: Feature<Polygon | MultiPolygon>
+  polygon: Feature<Polygon | MultiPolygon>,
+  options: RefreshOptions = {}
 ): Promise<RefreshSummary> {
   const mapboxToken = process.env.MAPBOX_SECRET_TOKEN;
   if (!mapboxToken) throw new Error('MAPBOX_SECRET_TOKEN is not set');
@@ -47,15 +74,22 @@ export async function refreshListingsForPolygon(
     return { listings: [], blocked: false };
   };
 
-  // Fan out to all sources in parallel. Each scraper may have a different
-  // rate-limit ceiling, so isolating failures via .catch keeps one source's
-  // 503 from killing the others.
+  // Resolve options: which sources to run, how deep, and how many towns/cities.
+  const selected = new Set(options.sources ?? ALL_SOURCES);
+  const pagesFor = (s: SourceName) => options.pages?.[s] ?? SHALLOW_PAGES[s];
+  const empty = async (): Promise<ScrapeResult> => ({ listings: [], blocked: false });
+  const run = (s: SourceName, scrape: () => Promise<ScrapeResult>) =>
+    selected.has(s) ? scrape().catch(handleFailure(s)) : empty();
+
+  // Fan out to the selected sources in parallel. Each scraper may have a
+  // different rate-limit ceiling, so isolating failures via .catch keeps one
+  // source's 503 from killing the others.
   const [realoResult, immowebResult, zimmoResult, immovlanResult, immoscoopResult] = await Promise.all([
-    scrapeRealo(areas, 2).catch(handleFailure('Realo')),
-    scrapeImmoweb(areas.map(a => a.postalCode), 3).catch(handleFailure('Immoweb')),
-    scrapeZimmo(areas, 2).catch(handleFailure('Zimmo')),
-    scrapeImmovlan(areas, 2).catch(handleFailure('Immovlan')),
-    scrapeImmoscoop(areas, 3).catch(handleFailure('ImmoScoop')),
+    run('realo', () => scrapeRealo(areas, pagesFor('realo'))),
+    run('immoweb', () => scrapeImmoweb(areas.map(a => a.postalCode), pagesFor('immoweb'))),
+    run('zimmo', () => scrapeZimmo(areas, pagesFor('zimmo'))),
+    run('immovlan', () => scrapeImmovlan(areas, pagesFor('immovlan'), options.maxAreas)),
+    run('immoscoop', () => scrapeImmoscoop(areas, pagesFor('immoscoop'), options.maxAreas)),
   ]);
 
   const sources = [
