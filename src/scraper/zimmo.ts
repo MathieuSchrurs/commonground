@@ -1,181 +1,120 @@
-import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
-import { mapPropertyType, scrapePaginated } from './common';
+import { Area } from './areas';
+import { dedupeById, mapPropertyType, scrapePaginated } from './common';
 
-const SEARCH_URL = 'https://www.zimmo.be/en/to-buy/';
+const BASE = 'https://www.zimmo.be';
 
-function buildSearchUrl(pageNum: number, bbox?: [number, number, number, number]): string {
-  const filter: Record<string, unknown> = { filter: {} };
-  if (bbox) {
-    const [minLng, minLat, maxLng, maxLat] = bbox;
-    (filter.filter as Record<string, unknown>).geo = {
-      shape: {
-        type: 'envelope',
-        coordinates: [[minLng, maxLat], [maxLng, minLat]],
-      },
-    };
-  }
-  const encoded = Buffer.from(JSON.stringify(filter)).toString('base64');
-  return `${SEARCH_URL}?search=${encoded}&page=${pageNum}`;
-}
+// Zimmo's results page embeds its listings as a `properties: [ … ]` array
+// inside an inline `app.start({ … })` call — there's no JSON-LD or
+// __NEXT_DATA__ to lean on. Each object carries exact lat/lon plus the street
+// address, so Zimmo listings need no geocoding at all.
+//
+// We can't regex the array out: values contain stray brackets (image URLs,
+// nested advertiser objects), so we scan from the opening `[` tracking bracket
+// depth (and skipping string contents) until the matching `]`, then JSON.parse.
+export function extractProperties(html: string): Record<string, unknown>[] {
+  const appStart = html.indexOf('app.start(');
+  const keyAt = html.indexOf('properties:', appStart === -1 ? 0 : appStart);
+  if (keyAt === -1) return [];
+  const open = html.indexOf('[', keyAt);
+  if (open === -1) return [];
 
-export function extractFromScripts(html: string): PropertyListing[] | null {
-  const $ = cheerio.load(html);
-
-  // Zimmo sometimes stores data in a <script> with a specific variable.
-  // cheerio's .html() yields only the script's inner text — no closing
-  // </script> tag — so end-of-content must also terminate the match.
-  const scriptPatterns = [
-    /window\.__INITIAL_STATE__\s*=\s*({[\s\S]+?});\s*(?:window\.|<\/script>|$)/,
-    /window\.__APP_STATE__\s*=\s*({[\s\S]+?});\s*(?:window\.|<\/script>|$)/,
-    /__NUXT__\s*=\s*({[\s\S]+?});\s*(?:<\/script>|$)/,
-  ];
-
-  for (const pattern of scriptPatterns) {
-    let found: Record<string, unknown> | null = null;
-    $('script').each((_, el) => {
-      if (found) return;
-      const content = $(el).html() ?? '';
-      const m = content.match(pattern);
-      if (m) {
-        try { found = JSON.parse(m[1]); } catch { /* skip */ }
-      }
-    });
-
-    if (found) {
-      // Try to find listings array in the parsed state
-      const candidates = JSON.stringify(found).match(/"properties":\[{|"listings":\[{|"results":\[{/);
-      if (candidates) {
-        console.log('[Zimmo] Found state object, attempting extraction');
-        // Deep search for array of objects with price/url fields
-        function findListings(obj: unknown): unknown[] | null {
-          if (Array.isArray(obj) && obj.length > 0 && typeof obj[0] === 'object') {
-            const first = obj[0] as Record<string, unknown>;
-            if (first.price !== undefined || first.url !== undefined || first.id !== undefined) {
-              return obj;
-            }
-          }
-          if (obj && typeof obj === 'object') {
-            for (const val of Object.values(obj as Record<string, unknown>)) {
-              const result = findListings(val);
-              if (result) return result;
-            }
-          }
-          return null;
-        }
-        const listings = findListings(found);
-        if (listings && listings.length > 0) {
-          return listings.map((item: unknown) => {
-            const r = item as Record<string, unknown>;
-            const id = String(r.id ?? r.propertyId ?? '');
-            const url = r.url as string ?? r.detailUrl as string ?? '';
-            const fullUrl = url.startsWith('http') ? url : `https://www.zimmo.be${url}`;
-            const priceObj = r.price as Record<string, unknown> ?? {};
-            const locObj = r.location as Record<string, unknown> ?? r.address as Record<string, unknown> ?? {};
-
-            return {
-              source: 'zimmo' as const,
-              external_id: id,
-              url: fullUrl,
-              price: (priceObj.amount ?? priceObj.value ?? r.price) as number ?? undefined,
-              city: locObj.city as string ?? locObj.locality as string ?? undefined,
-              postal_code: String(locObj.postalCode ?? locObj.zip ?? '') || undefined,
-              address: [locObj.street, locObj.city].filter(Boolean).join(', ') || undefined,
-              property_type: mapPropertyType(r.type as string ?? (r.property as Record<string, unknown>)?.type as string),
-              bedrooms: (r.bedrooms ?? (r.property as Record<string, unknown>)?.bedroomCount) as number ?? undefined,
-              surface_area: (r.livingArea ?? (r.property as Record<string, unknown>)?.livingSurface) as number ?? undefined,
-              image_url: ((r.images as Record<string, unknown>[])?.[0]?.url as string) ?? undefined,
-            };
-          }).filter(l => l.external_id);
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+  for (let i = open; i < html.length; i++) {
+    const ch = html[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(html.slice(open, i + 1)) as Record<string, unknown>[];
+        } catch {
+          return [];
         }
       }
     }
   }
-
-  return null;
+  return [];
 }
 
-export function extractFromHtml(html: string): PropertyListing[] {
-  const $ = cheerio.load(html);
-  const listings: PropertyListing[] = [];
+// Zimmo sends every numeric field as a string ("2150000", "51.0463", "5").
+const num = (v: unknown): number | undefined => {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 
-  // Try JSON-LD
-  $('script[type="application/ld+json"]').each((_, el) => {
-    try {
-      const data = JSON.parse($(el).html() ?? '');
-      const items = Array.isArray(data) ? data : [data];
-      items.forEach((item: Record<string, unknown>) => {
-        if (item['@type'] === 'Residence' || item['@type'] === 'House' || item['@type'] === 'Apartment') {
-          const id = String(item['@id'] ?? item.identifier ?? '').replace(/\D/g, '');
-          if (id) {
-            const addr = item.address as Record<string, unknown> ?? {};
-            listings.push({
-              source: 'zimmo',
-              external_id: id,
-              url: item.url as string ?? '',
-              title: item.name as string ?? undefined,
-              city: addr.addressLocality as string ?? undefined,
-              postal_code: addr.postalCode as string ?? undefined,
-              price: (item.offers as Record<string, unknown>)?.price as number ?? undefined,
-              latitude: item.geo ? (item.geo as Record<string, unknown>).latitude as number : undefined,
-              longitude: item.geo ? (item.geo as Record<string, unknown>).longitude as number : undefined,
-            });
-          }
-        }
-      });
-    } catch { /* skip */ }
+export function parseListings(html: string): PropertyListing[] {
+  return extractProperties(html).flatMap((r): PropertyListing[] => {
+    const code = str(r.code);
+    if (!code) return [];
+    const url = str(r.url) ?? '';
+    return [{
+      source: 'zimmo' as const,
+      external_id: code,
+      url: url.startsWith('http') ? url : `${BASE}${url}`,
+      price: num(r.prijs),
+      address: str(r.address),
+      city: str(r.gemeente),
+      postal_code: str(r.postcode),
+      latitude: num(r.lat),
+      longitude: num(r.lon),
+      property_type: mapPropertyType(str(r.type)),
+      bedrooms: num(r.slaapkamers),
+      surface_area: num(r.b_woonopp),
+      image_url: str(r.hoofdFoto),
+    }];
   });
-
-  if (listings.length > 0) return listings;
-
-  // Card-based fallback
-  $('article, [class*="PropertyCard"], [class*="property-card"], [data-testid="property-card"]').each((_, el) => {
-    const card = $(el);
-    const anchor = card.find('a[href*="/property/"], a[href*="/te-koop/"], a[href*="/for-sale/"]').first();
-    const href = anchor.attr('href') ?? card.find('a').first().attr('href') ?? '';
-    const idMatch = href.match(/\/(\d+)\/?(?:\?|$)/);
-    const id = idMatch?.[1];
-    if (!id || !href) return;
-
-    const priceText = card.find('[class*="price"], [class*="Price"]').first().text().replace(/[^\d]/g, '');
-    const locality = card.find('[class*="location"], [class*="Location"], [class*="city"], [class*="City"]').first().text().trim();
-    const localityMatch = locality.match(/^(\d{4})\s+(.+)$/);
-
-    listings.push({
-      source: 'zimmo',
-      external_id: id,
-      url: href.startsWith('http') ? href : `https://www.zimmo.be${href}`,
-      address: locality || undefined,
-      city: (localityMatch?.[2] ?? locality) || undefined,
-      postal_code: localityMatch?.[1] ?? undefined,
-      price: priceText ? parseInt(priceText, 10) : undefined,
-      image_url: card.find('img').first().attr('src') ?? undefined,
-    });
-  });
-
-  return listings;
 }
 
 export async function scrapeZimmo(
-  bbox: [number, number, number, number],
-  maxPages = 3
+  areas: Area[],
+  maxPagesPerArea = 2
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  console.log(`[Zimmo] Starting scrape — bbox: ${bbox.join(', ')}, pages: ${maxPages}`);
+  if (areas.length === 0) {
+    console.warn('[Zimmo] No areas to scrape');
+    return { listings: [], blocked: false };
+  }
 
-  return scrapePaginated({
-    label: 'Zimmo',
-    maxPages,
-    delayMs: 1500,
-    buildUrl: page => buildSearchUrl(page, bbox),
-    parse: html => {
-      const fromScripts = extractFromScripts(html);
-      if (fromScripts !== null) {
-        console.log(`[Zimmo] Extracted ${fromScripts.length} from scripts`);
-        return fromScripts;
-      }
-      const fromHtml = extractFromHtml(html);
-      console.log(`[Zimmo] HTML fallback: ${fromHtml.length} listings`);
-      return fromHtml;
-    },
-  });
+  // One search URL per area: /nl/{citySlug}-{postalCode}/te-koop/ . Dedupe by
+  // slug — adjacent grid points can resolve to the same municipality.
+  const slugs = new Map<string, true>();
+  for (const a of areas) {
+    if (a.citySlug && a.postalCode) slugs.set(`${a.citySlug}-${a.postalCode}`, true);
+  }
+
+  console.log(`[Zimmo] Scraping ${slugs.size} area URLs`);
+
+  const all: PropertyListing[] = [];
+  let blocked = false;
+  for (const slug of slugs.keys()) {
+    const base = `${BASE}/nl/${slug}/te-koop/`;
+    const result = await scrapePaginated({
+      label: 'Zimmo',
+      maxPages: maxPagesPerArea,
+      delayMs: 1500,
+      // Cloudflare-protected → route every fetch through the scraping API.
+      proxied: true,
+      buildUrl: page => `${base}?p=${page}`,
+      parse: parseListings,
+    });
+    all.push(...result.listings);
+    blocked = blocked || result.blocked;
+    await new Promise(r => setTimeout(r, 600));
+  }
+
+  // Adjacent areas return overlapping listings — dedupe by Zimmo's code.
+  const unique = dedupeById(all);
+  console.log(`[Zimmo] Done. ${unique.length} unique listings across ${slugs.size} areas`);
+  return { listings: unique, blocked };
 }

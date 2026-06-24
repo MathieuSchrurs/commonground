@@ -105,7 +105,7 @@ async function main() {
   const immoweb = await scrapeImmoweb(areas.map(a => a.postalCode), 2).catch(e => { console.error(e); return { listings: [], blocked: false }; });
   await audit('Immoweb', immoweb.listings, immoweb.blocked);
 
-  const zimmo = await scrapeZimmo(BBOX, 1).catch(e => { console.error(e); return { listings: [], blocked: false }; });
+  const zimmo = await scrapeZimmo(areas, 1).catch(e => { console.error(e); return { listings: [], blocked: false }; });
   await audit('Zimmo', zimmo.listings, zimmo.blocked);
 
   const immovlan = await scrapeImmovlan(areas, 1).catch(e => { console.error(e); return { listings: [], blocked: false }; });

@@ -1,4 +1,5 @@
 import { PropertyListing } from './types';
+import { buildProxiedUrl } from './proxy-fetch';
 
 // Headers that closely mimic a real Chrome browser on macOS. Shared by all
 // scrapers so anti-bot fixes land everywhere at once.
@@ -51,10 +52,19 @@ interface FetchHtmlResult {
 // Fetch a page and classify failures: network errors and plain HTTP errors
 // just yield no HTML, while 403/429 and suspiciously short responses are
 // flagged as the site actively blocking us.
-async function fetchHtml(label: string, url: string): Promise<FetchHtmlResult> {
+//
+// `proxied` routes the request through the Cloudflare-solving scraping API
+// (when SCRAPER_API_KEY is set). The API supplies its own browser identity, so
+// we don't attach BROWSER_HEADERS on that path. If no key is configured,
+// buildProxiedUrl returns null and we fall back to a direct fetch.
+async function fetchHtml(label: string, url: string, proxied = false): Promise<FetchHtmlResult> {
+  const proxiedUrl = proxied ? buildProxiedUrl(url) : null;
+  const fetchUrl = proxiedUrl ?? url;
+  const init: RequestInit = proxiedUrl ? {} : { headers: BROWSER_HEADERS };
+
   let res: Response;
   try {
-    res = await fetch(url, { headers: BROWSER_HEADERS });
+    res = await fetch(fetchUrl, init);
   } catch (err) {
     console.error(`[${label}] Network error:`, err);
     return { html: null, blocked: false };
@@ -89,6 +99,8 @@ export interface PaginatedScrapeOptions {
   delayMs: number;
   buildUrl: (page: number) => string;
   parse: (html: string) => PropertyListing[];
+  /** Route fetches through the Cloudflare-solving scraping API (Zimmo). */
+  proxied?: boolean;
 }
 
 // The pagination loop every scraper shares: fetch page N, parse it, stop as
@@ -97,15 +109,15 @@ export interface PaginatedScrapeOptions {
 export async function scrapePaginated(
   opts: PaginatedScrapeOptions
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  const { label, maxPages, delayMs, buildUrl, parse } = opts;
+  const { label, maxPages, delayMs, buildUrl, parse, proxied = false } = opts;
   const all: PropertyListing[] = [];
   let blocked = false;
 
   for (let p = 1; p <= maxPages; p++) {
     const url = buildUrl(p);
-    console.log(`[${label}] Fetching page ${p}: ${url}`);
+    console.log(`[${label}] Fetching page ${p}: ${url}${proxied ? ' (via scraping API)' : ''}`);
 
-    const result = await fetchHtml(label, url);
+    const result = await fetchHtml(label, url, proxied);
     blocked = result.blocked;
     if (result.html === null) break;
 
