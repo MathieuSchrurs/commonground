@@ -10,8 +10,12 @@ they struggle to *converge* on one.
 
 House hunting is a weeks-long watch, not a one-time query.
 
-- [x] Scheduled scraping: a daily Vercel cron (`/api/cron/scrape`) recomputes
-      each active session's intersection and refreshes listings in Supabase.
+- [x] Scheduled scraping: a GitHub Actions crawler
+      (`.github/workflows/crawl.yml` → `src/scraper/run-crawler.ts`) crawls the
+      unioned commute zone of all active sessions, deep-paginated and with no
+      300s limit. Free sources daily; Zimmo weekly + capped to fit Scrape.do's
+      free tier. (Superseded the daily Vercel cron, now retired to a manual
+      `/api/cron/scrape` fallback.)
 - [x] `first_seen_at` on listings — set once when a listing first appears, so
       the UI can flag what's new since you last looked.
 - [x] Auto-load cached listings when a session opens (no button press needed);

@@ -5,7 +5,8 @@ import { mapPropertyType, scrapePaginated, dedupeById } from './common';
 
 const BASE_URL = 'https://immovlan.be/en/real-estate?transactiontypes=for-sale&propertytypes=house,apartment';
 
-// Towns scraped per run; each costs maxPages requests
+// Default towns scraped per run; each costs maxPages requests. The unbounded
+// crawler raises this via the maxTowns arg to cover the whole search zone.
 const MAX_TOWNS = 8;
 
 export function parsePrice(raw: string): number | undefined {
@@ -80,9 +81,10 @@ export function parseCards(html: string): PropertyListing[] {
 // only honours one town per request, so we scrape town by town.
 export async function scrapeImmovlan(
   areas: Area[],
-  maxPages = 2
+  maxPages = 2,
+  maxTowns = MAX_TOWNS
 ): Promise<{ listings: PropertyListing[]; blocked: boolean }> {
-  const towns = areas.filter(a => a.citySlug).slice(0, MAX_TOWNS);
+  const towns = areas.filter(a => a.citySlug).slice(0, maxTowns);
   if (towns.length === 0) return { listings: [], blocked: false };
   console.log(`[Immovlan] Starting scrape — ${towns.length} towns, ${maxPages} pages each`);
 
