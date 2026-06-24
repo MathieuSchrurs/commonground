@@ -38,7 +38,6 @@ export async function refreshListingsForPolygon(
   if (!mapboxToken) throw new Error('MAPBOX_SECRET_TOKEN is not set');
 
   const [minLng, minLat, maxLng, maxLat] = turf.bbox(polygon);
-  const bbox: [number, number, number, number] = [minLng, minLat, maxLng, maxLat];
   const scrapeStartedAt = new Date().toISOString();
 
   const areas = await discoverAreas(polygon, mapboxToken);
@@ -54,7 +53,7 @@ export async function refreshListingsForPolygon(
   const [realoResult, immowebResult, zimmoResult, immovlanResult, immoscoopResult] = await Promise.all([
     scrapeRealo(areas, 2).catch(handleFailure('Realo')),
     scrapeImmoweb(areas.map(a => a.postalCode), 3).catch(handleFailure('Immoweb')),
-    scrapeZimmo(bbox, 2).catch(handleFailure('Zimmo')),
+    scrapeZimmo(areas, 2).catch(handleFailure('Zimmo')),
     scrapeImmovlan(areas, 2).catch(handleFailure('Immovlan')),
     scrapeImmoscoop(areas, 3).catch(handleFailure('ImmoScoop')),
   ]);
