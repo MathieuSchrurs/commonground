@@ -15,6 +15,10 @@ on:
         type: choice
         default: free
         options: [free, zimmo, all]
+      zimmo_pages:
+        description: "Zimmo pages per area (manual runs only; blank = default). Use 1 to cheaply measure Scrape.do credit cost."
+        type: string
+        default: ""
 
 jobs:
   crawl:
@@ -32,21 +36,24 @@ jobs:
 
       - run: npm ci
 
-      # Pick the mode: dispatch input wins; otherwise the weekly cron means
-      # Zimmo and any other schedule means the free sources.
-      - name: Resolve mode
+      # Build the runner args: dispatch input wins (and may add --zimmo-pages);
+      # otherwise the weekly cron means Zimmo and any other schedule the free sources.
+      - name: Resolve args
         id: resolve
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+            ARGS="--mode ${{ github.event.inputs.mode }}"
+            ZP="${{ github.event.inputs.zimmo_pages }}"
+            if [ -n "$ZP" ]; then ARGS="$ARGS --zimmo-pages $ZP"; fi
           elif [ "${{ github.event.schedule }}" = "0 4 * * 1" ]; then
-            echo "mode=zimmo" >> "$GITHUB_OUTPUT"
+            ARGS="--mode zimmo"
           else
-            echo "mode=free" >> "$GITHUB_OUTPUT"
+            ARGS="--mode free"
           fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
 
       - name: Crawl
-        run: npx tsx src/scraper/run-crawler.ts --mode ${{ steps.resolve.outputs.mode }}
+        run: npx tsx src/scraper/run-crawler.ts ${{ steps.resolve.outputs.args }}
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
