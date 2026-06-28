@@ -35,10 +35,14 @@ const FREE_SOURCES: SourceName[] = ['realo', 'immoweb', 'immovlan', 'immoscoop']
 
 // Page caps for the unbounded crawler. These are safety ceilings: every
 // scraper stops early on the first empty page (verified per source), so a
-// generous cap just means "go to exhaustion". Zimmo is kept tight because each
-// of its pages spends a Scrape.do credit against the 1,000/mo free tier.
+// generous cap just means "go to exhaustion".
 const DEEP_FREE_PAGES = 25;
-const DEFAULT_ZIMMO_PAGES = 5;
+// Zimmo is throttled hard: each request costs ~25 Scrape.do credits (render +
+// super/residential proxy to clear Cloudflare) against a 1,000/mo free tier.
+// Measured at 6 areas: 1 page/week ≈ 645 credits/month (fits); 2 pages would
+// blow the budget. Page 1 is the newest listings, which is what weekly
+// monitoring wants. Override per-run with --zimmo-pages for a deeper backfill.
+const DEFAULT_ZIMMO_PAGES = 1;
 
 // Towns/cities the breadth-capped sources (Immovlan, ImmoScoop) may cover. The
 // union of ~6 people's zones is well under this, so it rarely bites.
