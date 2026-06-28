@@ -181,9 +181,13 @@ export default function Map({
     [properties, matchesFilters]
   );
 
+  // Individual commute zones default to hidden: with several members their
+  // filled overlays stack up and bury the streets. The common area (the only
+  // zone that matters for the search) stays visible, and the Zones master
+  // toggle brings the per-member zones back when needed.
   const getInitialVisibility = useCallback((): LayerVisibility => ({
     markers: users.map(() => true),
-    isochrones: isochrones.map(() => true),
+    isochrones: isochrones.map(() => false),
     intersection: true,
     properties: true,
   }), [users, isochrones]);
@@ -221,6 +225,12 @@ export default function Map({
       newIsochrones[index] = !newIsochrones[index];
       return { ...prev, isochrones: newIsochrones };
     });
+  }, []);
+
+  // Master toggle for the per-member zones — hide/show them all in one click,
+  // leaving the common-area (intersection) toggle untouched.
+  const setAllIsochrones = useCallback((value: boolean) => {
+    setVisibility(prev => ({ ...prev, isochrones: prev.isochrones.map(() => value) }));
   }, []);
 
   const toggleIntersection = useCallback(() => {
@@ -796,9 +806,18 @@ export default function Map({
               <>
                 <Separator className="my-3" />
                 <div className="space-y-1.5">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                    Zones · {isochrones.length}
-                  </div>
+                  <label className="flex items-center justify-between gap-2 cursor-pointer">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                      Zones · {isochrones.length}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      {visibility.isochrones.every(Boolean) ? 'Hide all' : 'Show all'}
+                      <Checkbox
+                        checked={visibility.isochrones.every(Boolean)}
+                        onCheckedChange={() => setAllIsochrones(!visibility.isochrones.every(Boolean))}
+                      />
+                    </span>
+                  </label>
                   {isochrones.map((_, index) => (
                     <label
                       key={`isochrone-${index}`}
