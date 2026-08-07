@@ -1,56 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server';
+import { NextRequest } from 'next/server';
+import { route } from '@/lib/session/route';
+import { createFolder, listFolders } from '@/lib/session/store';
 
-// All folders for a session, oldest first (stable display order).
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id: sessionId } = await params;
-    const supabase = await createClient();
+type Ctx = { params: Promise<{ id: string }> };
 
-    const { data, error } = await supabase
-      .from('session_folders')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
+// Folders in the shared files hub.
+export const GET = route(async (_r: NextRequest, { params }: Ctx) => {
+  const { id } = await params;
+  return { folders: await listFolders(id) };
+});
 
-    if (error) throw error;
-
-    return NextResponse.json({ folders: data ?? [] });
-  } catch (error) {
-    console.error('Error fetching folders:', error);
-    return NextResponse.json({ error: 'Failed to fetch folders' }, { status: 500 });
-  }
-}
-
-// Create a folder.
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id: sessionId } = await params;
-    const { name } = await request.json();
-
-    if (!name || !name.trim()) {
-      return NextResponse.json({ error: 'A folder name is required' }, { status: 400 });
-    }
-
-    const supabase = await createClient();
-
-    const { data, error } = await supabase
-      .from('session_folders')
-      .insert([{ session_id: sessionId, name: name.trim() } as never])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return NextResponse.json({ folder: data });
-  } catch (error) {
-    console.error('Error creating folder:', error);
-    return NextResponse.json({ error: 'Failed to create folder' }, { status: 500 });
-  }
-}
+export const POST = route(async (request: NextRequest, { params }: Ctx) => {
+  const { id } = await params;
+  const { name } = await request.json();
+  return { folder: await createFolder(id, name) };
+});

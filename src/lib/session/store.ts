@@ -3,12 +3,16 @@
 // and typed-error invariants. API routes are thin shells over these functions.
 //
 // Grows one aggregate at a time. Currently: sessions, users, households,
-// reactions, decisions.
+// reactions, decisions, the meeting and its agenda, todos, files and folders.
 
 import { createClient } from '@/utils/supabase/server';
 import { CommuteConstraint } from '@/types/user';
 import { Household } from '@/types/household';
 import { Decision } from '@/types/decisions';
+import { MeetingItem, Todo } from '@/types/todos';
+import { Meeting } from '@/types/meeting';
+import { Folder, SharedFile } from '@/types/files';
+import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
 import { resolveToggle } from './reactions';
@@ -534,4 +538,319 @@ export async function toggleReaction(
     .single();
   if (error) throw error;
   return data as unknown as ListingReaction;
+}
+
+// ---------------------------------------------------------------------------
+// The dashboard's aggregates. Every function here scopes by session_id, so a
+// route cannot forget to — the reason these moved out of the route files.
+// ---------------------------------------------------------------------------
+
+// The agenda for the next meeting, oldest first (stable reading order).
+export async function listMeetingItems(sessionId: string): Promise<MeetingItem[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('meeting_items')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as MeetingItem[];
+}
+
+export async function addMeetingItem(
+  sessionId: string,
+  text: string,
+  createdBy: string | null,
+): Promise<MeetingItem> {
+  if (!text?.trim()) throw new Invalid('Agenda text is required');
+  const db = await createClient();
+  const { data, error } = await db
+    .from('meeting_items')
+    .insert([{ session_id: sessionId, text: text.trim(), created_by: createdBy ?? null } as never])
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as MeetingItem;
+}
+
+export async function setMeetingItemDone(
+  sessionId: string,
+  itemId: string,
+  done: boolean,
+): Promise<MeetingItem> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('meeting_items')
+    .update({ done: !!done } as never)
+    .eq('id', itemId)
+    .eq('session_id', sessionId)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  // maybeSingle, so a row that does not exist (or is not ours) is a clean 404
+  // rather than an opaque 500 from single()'s "no rows" error.
+  if (!data) throw new NotFound('agenda item', itemId);
+  return data as unknown as MeetingItem;
+}
+
+export async function removeMeetingItem(sessionId: string, itemId: string): Promise<void> {
+  const db = await createClient();
+  const { error } = await db
+    .from('meeting_items')
+    .delete()
+    .eq('id', itemId)
+    .eq('session_id', sessionId);
+  if (error) throw error;
+}
+
+// Todos, open first then oldest — momentum front and centre, finished ones sink.
+export async function listTodos(sessionId: string): Promise<Todo[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_todos')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('done', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Todo[];
+}
+
+export async function addTodo(
+  sessionId: string,
+  title: string,
+  assignedTo: string | null,
+  createdBy: string | null,
+): Promise<Todo> {
+  if (!title?.trim()) throw new Invalid('A title is required');
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_todos')
+    .insert([{
+      session_id: sessionId,
+      title: title.trim(),
+      assigned_to: assignedTo ?? null,
+      created_by: createdBy ?? null,
+    } as never])
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as Todo;
+}
+
+// Close/reopen a todo and/or reassign it. done_at records when it was closed.
+export async function updateTodo(
+  sessionId: string,
+  todoId: string,
+  patch: { done?: boolean; assignedTo?: string | null },
+): Promise<Todo> {
+  const fields: Record<string, unknown> = {};
+  if (patch.done !== undefined) {
+    fields.done = !!patch.done;
+    fields.done_at = patch.done ? new Date().toISOString() : null;
+  }
+  if (patch.assignedTo !== undefined) fields.assigned_to = patch.assignedTo || null;
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_todos')
+    .update(fields as never)
+    .eq('id', todoId)
+    .eq('session_id', sessionId)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new NotFound('todo', todoId);
+  return data as unknown as Todo;
+}
+
+export async function removeTodo(sessionId: string, todoId: string): Promise<void> {
+  const db = await createClient();
+  const { error } = await db
+    .from('session_todos')
+    .delete()
+    .eq('id', todoId)
+    .eq('session_id', sessionId);
+  if (error) throw error;
+}
+
+// The single pinned meeting, or null if none is set yet.
+export async function getMeeting(sessionId: string): Promise<Meeting | null> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_meetings')
+    .select('*')
+    .eq('session_id', sessionId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as unknown as Meeting | null;
+}
+
+// Create or replace the next meeting. UNIQUE(session_id) makes this an upsert
+// in place — there is only ever one, deliberately (see docs/adr/0003).
+export async function setMeeting(
+  sessionId: string,
+  input: { meetsAt: string; location?: string | null; note?: string | null; updatedBy?: string | null },
+): Promise<Meeting> {
+  if (!input.meetsAt || isNaN(Date.parse(input.meetsAt))) {
+    throw new Invalid('A valid meetsAt timestamp is required');
+  }
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_meetings')
+    .upsert(
+      [{
+        session_id: sessionId,
+        meets_at: input.meetsAt,
+        location: input.location ?? null,
+        note: input.note ?? null,
+        updated_by: input.updatedBy ?? null,
+        updated_at: new Date().toISOString(),
+      } as never],
+      { onConflict: 'session_id' },
+    )
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as Meeting;
+}
+
+// Folders in the shared files hub, oldest first.
+export async function listFolders(sessionId: string): Promise<Folder[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_folders')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Folder[];
+}
+
+export async function createFolder(sessionId: string, name: string): Promise<Folder> {
+  if (!name?.trim()) throw new Invalid('A folder name is required');
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_folders')
+    .insert([{ session_id: sessionId, name: name.trim() } as never])
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as Folder;
+}
+
+// Delete a folder. Its files fall back to the root via ON DELETE SET NULL, so
+// nothing is lost.
+export async function removeFolder(sessionId: string, folderId: string): Promise<void> {
+  const db = await createClient();
+  const { error } = await db
+    .from('session_folders')
+    .delete()
+    .eq('id', folderId)
+    .eq('session_id', sessionId);
+  if (error) throw error;
+}
+
+// Shared files, newest first.
+export async function listFiles(sessionId: string): Promise<SharedFile[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('shared_files')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as unknown as SharedFile[];
+}
+
+// Persist the row pointing at bytes the browser already uploaded to Storage.
+export async function recordFile(
+  sessionId: string,
+  input: {
+    fileName: string;
+    storagePath: string;
+    mimeType?: string | null;
+    sizeBytes?: number | null;
+    listingId?: string | null;
+    folderId?: string | null;
+    note?: string | null;
+    uploadedBy?: string | null;
+  },
+): Promise<SharedFile> {
+  if (!input.fileName || !input.storagePath) {
+    throw new Invalid('fileName and storagePath are required');
+  }
+  const db = await createClient();
+  const { data, error } = await db
+    .from('shared_files')
+    .insert([{
+      session_id: sessionId,
+      file_name: input.fileName,
+      storage_path: input.storagePath,
+      mime_type: input.mimeType ?? null,
+      size_bytes: input.sizeBytes ?? null,
+      listing_id: input.listingId ?? null,
+      folder_id: input.folderId ?? null,
+      note: input.note ?? null,
+      uploaded_by: input.uploadedBy ?? null,
+    } as never])
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as SharedFile;
+}
+
+// Move a file between folders; null puts it back at the root of the hub.
+export async function moveFile(
+  sessionId: string,
+  fileId: string,
+  folderId: string | null,
+): Promise<SharedFile> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('shared_files')
+    .update({ folder_id: folderId ?? null } as never)
+    .eq('id', fileId)
+    .eq('session_id', sessionId)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new NotFound('file', fileId);
+  return data as unknown as SharedFile;
+}
+
+// Remove the bytes first, then the row: if Storage fails we keep the metadata
+// so the delete can be retried, rather than orphaning the object forever.
+export async function removeFile(sessionId: string, fileId: string): Promise<void> {
+  const db = await createClient();
+  const { data: file, error: fetchError } = await db
+    .from('shared_files')
+    .select('storage_path')
+    .eq('id', fileId)
+    .eq('session_id', sessionId)
+    .maybeSingle();
+  if (fetchError) throw fetchError;
+  if (!file) throw new NotFound('file', fileId);
+
+  const { error: storageError } = await db.storage
+    .from('shared-files')
+    .remove([(file as { storage_path: string }).storage_path]);
+  if (storageError) throw storageError;
+
+  const { error: deleteError } = await db
+    .from('shared_files')
+    .delete()
+    .eq('id', fileId)
+    .eq('session_id', sessionId);
+  if (deleteError) throw deleteError;
+}
+
+// The listings a set of reactions point at — the only listing read the
+// dashboard needs, and the last thing convergence was querying inline.
+export async function listListingsByIds(ids: string[]): Promise<PropertyListing[]> {
+  if (ids.length === 0) return [];
+  const db = await createClient();
+  const { data, error } = await db.from('property_listings').select('*').in('id', ids);
+  if (error) throw error;
+  return (data ?? []) as unknown as PropertyListing[];
 }
