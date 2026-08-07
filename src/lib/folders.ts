@@ -5,6 +5,9 @@ export interface FolderNode {
   folder: Folder;
   children: FolderNode[];
   files: SharedFile[];
+  // Files in this folder *and* everything beneath it, so a collapsed parent can
+  // still say whether it holds anything.
+  fileCount: number;
 }
 
 // Assemble the hub's tree from flat rows. Folders with no parent sit at the
@@ -31,10 +34,13 @@ export function buildFolderTree(folders: Folder[], files: SharedFile[]): FolderN
       .filter((f) => parentOf(f) === parentId && !seen.has(f.id))
       .map((folder) => {
         placed.add(folder.id);
+        const children = childrenOf(folder.id, new Set(seen).add(folder.id));
+        const own = filesOf(folder.id);
         return {
           folder,
-          children: childrenOf(folder.id, new Set(seen).add(folder.id)),
-          files: filesOf(folder.id),
+          children,
+          files: own,
+          fileCount: own.length + children.reduce((n, c) => n + c.fileCount, 0),
         };
       });
 
@@ -45,10 +51,13 @@ export function buildFolderTree(folders: Folder[], files: SharedFile[]): FolderN
   for (const folder of folders) {
     if (placed.has(folder.id)) continue;
     placed.add(folder.id);
+    const children = childrenOf(folder.id, new Set([folder.id]));
+    const own = filesOf(folder.id);
     tree.push({
       folder,
-      children: childrenOf(folder.id, new Set([folder.id])),
-      files: filesOf(folder.id),
+      children,
+      files: own,
+      fileCount: own.length + children.reduce((n, c) => n + c.fileCount, 0),
     });
   }
 
@@ -115,4 +124,20 @@ export function canMoveFolder(
   if (into !== null && !folders.some((f) => f.id === into)) return false;
 
   return depthOf(folders, into) + subtreeHeight(folders, folderId) <= MAX_FOLDER_DEPTH;
+}
+
+// Every folder with its full path and depth, in tree order. The path is what
+// makes two folders both called "Survey" distinguishable in a dropdown; the
+// depth lets a caller hide parents that are already at the limit.
+export function folderPaths(folders: Folder[]): { id: string; path: string; depth: number }[] {
+  const out: { id: string; path: string; depth: number }[] = [];
+  const walk = (nodes: FolderNode[], prefix: string, depth: number) => {
+    for (const node of nodes) {
+      const path = prefix ? `${prefix} / ${node.folder.name}` : node.folder.name;
+      out.push({ id: node.folder.id, path, depth });
+      walk(node.children, path, depth + 1);
+    }
+  };
+  walk(buildFolderTree(folders, []), '', 1);
+  return out;
 }

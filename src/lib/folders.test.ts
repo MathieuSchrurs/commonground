@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFolderTree, canMoveFolder, descendantsOf, MAX_FOLDER_DEPTH } from './folders';
+import { buildFolderTree, canMoveFolder, descendantsOf, folderPaths, MAX_FOLDER_DEPTH } from './folders';
 import { Folder, SharedFile } from '@/types/files';
 
 function folder(id: string, name: string, parent_id: string | null = null): Folder {
@@ -127,5 +127,38 @@ describe('canMoveFolder', () => {
 
     // And a folder already at the limit cannot take a child at all.
     expect(canMoveFolder(nested, 'mort', 'sur')).toBe(false);
+  });
+});
+
+describe('subtree file counts', () => {
+  it('counts files in descendants, not just direct children', () => {
+    const tree = buildFolderTree(nested, [file('a', 'sur'), file('b', 'k12'), file('c', 'mort')]);
+    const houses = tree.find((n) => n.folder.id === 'houses')!;
+
+    // A collapsed Houses must still say it holds two documents.
+    expect(houses.fileCount).toBe(2);
+    expect(houses.files).toEqual([]);
+    expect(tree.find((n) => n.folder.id === 'mort')!.fileCount).toBe(1);
+  });
+});
+
+describe('folderPaths', () => {
+  it('labels each folder by its full path, so like-named folders are distinguishable', () => {
+    const twoSurveys = [
+      folder('h1', 'Kerkstraat 12'),
+      folder('s1', 'Survey', 'h1'),
+      folder('h2', 'Dorpstraat 3'),
+      folder('s2', 'Survey', 'h2'),
+    ];
+    const paths = folderPaths(twoSurveys);
+
+    expect(paths.find((p) => p.id === 's1')!.path).toBe('Kerkstraat 12 / Survey');
+    expect(paths.find((p) => p.id === 's2')!.path).toBe('Dorpstraat 3 / Survey');
+  });
+
+  it('reports depth so a caller can hide parents that are already full', () => {
+    const paths = folderPaths(nested);
+    expect(paths.find((p) => p.id === 'houses')!.depth).toBe(1);
+    expect(paths.find((p) => p.id === 'sur')!.depth).toBe(3);
   });
 });

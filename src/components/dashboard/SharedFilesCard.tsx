@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { FileText, Folder as FolderIcon, FolderPlus, Trash2, Upload, ExternalLink } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, Folder as FolderIcon, FolderPlus, Trash2, Upload, ExternalLink } from 'lucide-react';
 import { SharedFile, Folder } from '@/types/files';
+import { buildFolderTree, folderPaths, FolderNode, MAX_FOLDER_DEPTH } from '@/lib/folders';
 import { createClient } from '@/utils/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -50,9 +51,47 @@ export default function SharedFilesCard({
   const [listingId, setListingId] = useState('');
   const [targetFolderId, setTargetFolderId] = useState('');
   const [newFolder, setNewFolder] = useState('');
+  const [newFolderParent, setNewFolderParent] = useState('');
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [rootCollapsed, setRootCollapsed] = useState(false);
+
+  const toggleFolder = (folderId: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
 
   const nameOf = new Map(users.map((u) => [u.id, u.name]));
   const houseLabel = new Map(houseOptions.map((h) => [h.id, h.label]));
+
+  // Full paths, so two folders both called "Survey" are distinguishable in a
+  // dropdown, and depth so parents already at the limit are not offered.
+  const paths = folderPaths(folders);
+  const parentOptions = paths.filter((p) => p.depth < MAX_FOLDER_DEPTH);
+
+  const tree = buildFolderTree(folders, files);
+  const rootFiles = files.filter((f) => f.folder_id === null);
+
+  // Every write reports its reason rather than silently doing nothing — the
+  // server rejects moves that would nest a folder inside itself or go too deep.
+  const send = async (url: string, init: RequestInit, fallback: string) => {
+    setError('');
+    try {
+      const res = await fetch(url, init);
+      if (!res.ok) {
+        setError((await res.json().catch(() => null))?.error ?? fallback);
+        return false;
+      }
+      onChanged();
+      return true;
+    } catch {
+      setError('Could not reach the server');
+      return false;
+    }
+  };
 
   const uploadFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -92,47 +131,69 @@ export default function SharedFilesCard({
     }
   };
 
-  const handleDelete = async (fileId: string) => {
-    const res = await fetch(`/api/sessions/${sessionId}/files/${fileId}`, { method: 'DELETE' });
-    if (res.ok) onChanged();
-  };
+  const handleDelete = (fileId: string) =>
+    send(`/api/sessions/${sessionId}/files/${fileId}`, { method: 'DELETE' }, 'Could not delete');
 
-  const handleMove = async (fileId: string, folderId: string) => {
-    const res = await fetch(`/api/sessions/${sessionId}/files/${fileId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folderId: folderId || null }),
-    });
-    if (res.ok) onChanged();
-  };
+  const handleMove = (fileId: string, folderId: string) =>
+    send(
+      `/api/sessions/${sessionId}/files/${fileId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId: folderId || null }),
+      },
+      'Could not move the file',
+    );
 
   const handleAddFolder = async () => {
     if (!newFolder.trim()) return;
-    const res = await fetch(`/api/sessions/${sessionId}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newFolder }),
-    });
-    if (res.ok) {
+    const ok = await send(
+      `/api/sessions/${sessionId}/folders`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newFolder, parentId: newFolderParent || null }),
+      },
+      'Could not create the folder',
+    );
+    if (ok) {
       setNewFolder('');
-      onChanged();
+      setNewFolderParent('');
     }
   };
 
-  const handleDeleteFolder = async (folderId: string) => {
-    const res = await fetch(`/api/sessions/${sessionId}/folders/${folderId}`, { method: 'DELETE' });
-    if (res.ok) onChanged();
-  };
+  const handleMoveFolder = (folderId: string, parentId: string) =>
+    send(
+      `/api/sessions/${sessionId}/folders/${folderId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentId: parentId || null }),
+      },
+      'Could not move the folder',
+    );
 
-  // Group files by folder; null folder_id is the root bucket. Show every folder
-  // (even empty ones the group just created), plus root if it has files.
-  const filesByFolder = new Map<string | null, SharedFile[]>();
-  for (const f of files) {
-    const key = f.folder_id ?? null;
-    const arr = filesByFolder.get(key) ?? [];
-    arr.push(f);
-    filesByFolder.set(key, arr);
-  }
+  // Say what will happen before wiping a folder: nothing inside is destroyed,
+  // but it does move, and that is worth knowing before confirming.
+  const handleDeleteFolder = (node: FolderNode) => {
+    const inside = [
+      node.fileCount > 0 ? `${node.fileCount} file${node.fileCount === 1 ? '' : 's'}` : null,
+      node.children.length > 0
+        ? `${node.children.length} folder${node.children.length === 1 ? '' : 's'}`
+        : null,
+    ].filter(Boolean).join(' and ');
+
+    const message = inside
+      ? `Delete "${node.folder.name}"? The ${inside} inside will move to the top level, not be deleted.`
+      : `Delete "${node.folder.name}"?`;
+    if (!window.confirm(message)) return;
+
+    return send(
+      `/api/sessions/${sessionId}/folders/${node.folder.id}`,
+      { method: 'DELETE' },
+      'Could not delete the folder',
+    );
+  };
 
   const renderFile = (f: SharedFile) => (
     <li
@@ -165,8 +226,8 @@ export default function SharedFilesCard({
           aria-label="Move to folder"
         >
           <option value="">No folder</option>
-          {folders.map((folder) => (
-            <option key={folder.id} value={folder.id}>{folder.name}</option>
+          {paths.map((p) => (
+            <option key={p.id} value={p.id}>{p.path}</option>
           ))}
         </select>
       )}
@@ -181,7 +242,71 @@ export default function SharedFilesCard({
     </li>
   );
 
-  const rootFiles = filesByFolder.get(null) ?? [];
+  // A folder and everything beneath it. Collapsing a parent hides its whole
+  // subtree, because the children render inside this block.
+  const renderFolder = (node: FolderNode, depth: number) => {
+    const collapsed = collapsedFolders.has(node.folder.id);
+    return (
+      <div key={node.folder.id} className="space-y-1.5" style={{ marginLeft: depth * 16 }}>
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <button
+            type="button"
+            onClick={() => toggleFolder(node.folder.id)}
+            className="flex items-center gap-2 min-w-0 flex-1 rounded-md py-0.5 pr-2 text-left hover:bg-accent/40"
+            aria-expanded={!collapsed}
+          >
+            {collapsed ? (
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+            <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{node.folder.name}</span>
+            <span className="text-xs font-mono tabular-nums text-muted-foreground">
+              {node.fileCount}
+            </span>
+          </button>
+          {folders.length > 1 && (
+            <select
+              value={node.folder.parent_id ?? ''}
+              onChange={(e) => handleMoveFolder(node.folder.id, e.target.value)}
+              className={selectClass}
+              aria-label={`Move folder ${node.folder.name}`}
+            >
+              <option value="">Top level</option>
+              {parentOptions
+                .filter((p) => p.id !== node.folder.id)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>{p.path}</option>
+                ))}
+            </select>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => handleDeleteFolder(node)}
+            aria-label={`Delete folder ${node.folder.name}`}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+          </Button>
+        </div>
+
+        {!collapsed && (
+          <>
+            {node.files.length > 0 && (
+              <ul className="space-y-1.5">{node.files.map(renderFile)}</ul>
+            )}
+            {node.files.length === 0 && node.children.length === 0 && (
+              <p className="pl-9 text-xs text-muted-foreground">
+                Empty — upload here or move files in.
+              </p>
+            )}
+            {node.children.map((child) => renderFolder(child, depth + 1))}
+          </>
+        )}
+      </div>
+    );
+  };
 
   return (
     <Card>
@@ -192,14 +317,27 @@ export default function SharedFilesCard({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {/* Create a folder */}
+        {/* Create a folder, optionally inside another */}
         <div className="flex gap-2">
           <Input
             placeholder="New folder name"
             value={newFolder}
             onChange={(e) => setNewFolder(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAddFolder(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && newFolder.trim()) handleAddFolder(); }}
           />
+          {parentOptions.length > 0 && (
+            <select
+              value={newFolderParent}
+              onChange={(e) => setNewFolderParent(e.target.value)}
+              className={`${selectClass} text-sm`}
+              aria-label="Create inside"
+            >
+              <option value="">At the top level</option>
+              {parentOptions.map((p) => (
+                <option key={p.id} value={p.id}>Inside {p.path}</option>
+              ))}
+            </select>
+          )}
           <Button size="sm" variant="ghost" onClick={handleAddFolder} disabled={!newFolder.trim()}>
             <FolderPlus className="h-4 w-4 mr-1" />
             Add
@@ -229,8 +367,8 @@ export default function SharedFilesCard({
             className={`${selectClass} text-sm`}
           >
             <option value="">Upload to root</option>
-            {folders.map((folder) => (
-              <option key={folder.id} value={folder.id}>{folder.name}</option>
+            {paths.map((p) => (
+              <option key={p.id} value={p.id}>{p.path}</option>
             ))}
           </select>
         </div>
@@ -264,43 +402,34 @@ export default function SharedFilesCard({
           <p className="text-sm text-muted-foreground">No files yet.</p>
         ) : (
           <div className="space-y-4">
-            {/* One section per folder, in creation order */}
-            {folders.map((folder) => {
-              const folderFiles = filesByFolder.get(folder.id) ?? [];
-              return (
-                <div key={folder.id} className="space-y-1.5">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <FolderIcon className="h-4 w-4 text-muted-foreground" />
-                    <span>{folder.name}</span>
-                    <span className="text-xs font-mono tabular-nums text-muted-foreground">
-                      {folderFiles.length}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="ml-auto"
-                      onClick={() => handleDeleteFolder(folder.id)}
-                      aria-label={`Delete folder ${folder.name}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-                    </Button>
-                  </div>
-                  {folderFiles.length === 0 ? (
-                    <p className="pl-6 text-xs text-muted-foreground">Empty — upload here or move files in.</p>
-                  ) : (
-                    <ul className="space-y-1.5">{folderFiles.map(renderFile)}</ul>
-                  )}
-                </div>
-              );
-            })}
+            {tree.map((node) => renderFolder(node, 0))}
 
-            {/* Files not in any folder */}
+            {/* Files in no folder at all */}
             {rootFiles.length > 0 && (
               <div className="space-y-1.5">
                 {folders.length > 0 && (
-                  <div className="text-sm font-medium text-muted-foreground">No folder</div>
+                  <button
+                    type="button"
+                    onClick={() => setRootCollapsed((c) => !c)}
+                    className="flex items-center gap-2 text-sm font-medium text-muted-foreground rounded-md py-0.5 pr-2 hover:bg-accent/40"
+                    aria-expanded={!rootCollapsed}
+                  >
+                    {rootCollapsed ? (
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span>No folder</span>
+                    <span className="text-xs font-mono tabular-nums text-muted-foreground">
+                      {rootFiles.length}
+                    </span>
+                  </button>
                 )}
-                <ul className="space-y-1.5">{rootFiles.map(renderFile)}</ul>
+                {/* Without a toggle to reopen it, collapsed must not hide them:
+                    deleting the last folder used to strand every root file. */}
+                {(!rootCollapsed || folders.length === 0) && (
+                  <ul className="space-y-1.5">{rootFiles.map(renderFile)}</ul>
+                )}
               </div>
             )}
           </div>
