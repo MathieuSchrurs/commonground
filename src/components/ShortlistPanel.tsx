@@ -32,16 +32,16 @@ export default function ShortlistPanel({
   households = [],
 }: ShortlistPanelProps) {
   const shortlist = useMemo(() => {
-    const { favorites, contested } = computeConvergence({
+    const { considered, contested } = computeConvergence({
       listings: properties,
       reactions,
       participants: users,
       households,
     });
-    return [
-      ...favorites.map((e) => ({ entry: e, contested: false })),
-      ...contested.map((e) => ({ entry: e, contested: true })),
-    ];
+    // Everything anyone wants, not just what has reached favorite status — a
+    // house the group is still warming to must not vanish off the map.
+    const arguing = new Set(contested.map((e) => e.listing.id));
+    return considered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
   }, [properties, reactions, users, households]);
 
   if (shortlist.length === 0) return null;

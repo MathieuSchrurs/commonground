@@ -34,7 +34,7 @@ export async function GET(
 
     const listingIds = Array.from(new Set(reactions.map((r) => r.listing_id)));
     if (listingIds.length === 0) {
-      return NextResponse.json({ engaged: [], favorites: [], contested: [] });
+      return NextResponse.json({ engaged: [], considered: [], favorites: [], contested: [] });
     }
 
     const { data: listings, error: listingsError } = await supabase

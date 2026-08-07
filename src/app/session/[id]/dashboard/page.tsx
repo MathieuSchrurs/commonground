@@ -31,6 +31,7 @@ export default function DashboardPage() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [convergence, setConvergence] = useState<Convergence>({
     engaged: [],
+    considered: [],
     favorites: [],
     contested: [],
   });
@@ -65,7 +66,7 @@ export default function DashboardPage() {
     const res = await fetch(`/api/sessions/${sessionId}/convergence`);
     // Spread over the defaults: engaged is dereferenced in the render body, so
     // a response missing it would blank the whole dashboard, not just a card.
-    if (res.ok) setConvergence({ engaged: [], favorites: [], contested: [], ...(await res.json()) });
+    if (res.ok) setConvergence({ engaged: [], considered: [], favorites: [], contested: [], ...(await res.json()) });
   }, [sessionId]);
 
   const loadFiles = useCallback(async () => {
@@ -126,6 +127,14 @@ export default function DashboardPage() {
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'listing_reactions', filter: `session_id=eq.${sessionId}` },
         () => loadConvergence())
+      // Pairing changes what every heart counts for, and a participant
+      // joining or leaving changes the denominator — both re-rank the cards.
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'households', filter: `session_id=eq.${sessionId}` },
+        () => loadConvergence())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'session_users', filter: `session_id=eq.${sessionId}` },
+        () => { loadConvergence(); loadUsers(); })
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'meeting_items', filter: `session_id=eq.${sessionId}` },
         () => loadMeetingItems())
@@ -134,7 +143,7 @@ export default function DashboardPage() {
         () => loadTodos())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadMeetingItems, loadTodos, supabase]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadUsers, loadMeetingItems, loadTodos, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {

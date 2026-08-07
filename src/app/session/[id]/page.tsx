@@ -146,11 +146,17 @@ export default function SessionPage() {
   }, [sessionId]);
 
   const loadUsersAndHouseholds = useCallback(async () => {
-    const [usersRes] = await Promise.all([
-      fetch(`/api/sessions/${sessionId}`),
-      loadHouseholds(),
-    ]);
-    if (usersRes.ok) setUsers((await usersRes.json()).users ?? []);
+    await loadHouseholds();
+    const res = await fetch(`/api/sessions/${sessionId}`);
+    if (!res.ok) return;
+    const { users: fresh } = (await res.json()) as { users: CommuteConstraint[] };
+    // globalThis.Map — `Map` in this module is the map component.
+    const byId = new globalThis.Map(fresh.map((u) => [u.id, u] as const));
+    // Merge by id rather than replacing wholesale: users and isochrones are
+    // index-parallel (zone colours and marker toggles key off the index), so
+    // reordering here would shift names and colours off their geometries.
+    // Additions and removals arrive through realtime, which keeps both in step.
+    setUsers((prev) => prev.map((u) => byId.get(u.id) ?? u));
   }, [sessionId, loadHouseholds]);
 
   useEffect(() => { loadHouseholds(); }, [loadHouseholds]);
@@ -349,7 +355,36 @@ export default function SessionPage() {
             return;
           }
 
-          const isochrone = await fetchIsochrone(constraint);
+          // Not every UPDATE touches the zone. Pairing into a household writes
+          // household_id on each member, and refetching an isochrone per member
+          // per connected client would burn Mapbox calls and churn the map for
+          // a column that has nothing to do with geometry.
+          if (eventType === 'UPDATE') {
+            const idx = usersRef.current.findIndex(u => u.id === constraint.id);
+            if (idx === -1) return;
+            const prev = usersRef.current[idx];
+            const sameZone =
+              prev.latitude === constraint.latitude &&
+              prev.longitude === constraint.longitude &&
+              prev.maxMinutes === constraint.maxMinutes &&
+              prev.transportMode === constraint.transportMode;
+
+            if (sameZone) {
+              const updatedUsers = [...usersRef.current];
+              updatedUsers[idx] = constraint;
+              setUsers(updatedUsers);
+              return;
+            }
+          }
+
+          // A rate-limited or failed isochrone must not become an unhandled
+          // rejection inside this async callback.
+          let isochrone;
+          try {
+            isochrone = await fetchIsochrone(constraint);
+          } catch {
+            return;
+          }
 
           if (eventType === 'INSERT') {
             // Re-check after the async fetch: a concurrent delivery may have
@@ -379,6 +414,21 @@ export default function SessionPage() {
       subscription.unsubscribe();
     };
   }, [sessionId, fetchIsochrone, computeAndSetIntersection, supabase]);
+
+  // Pairing changes what every heart counts for, so it has to reach the other
+  // participants' screens — otherwise their badges keep counting a new couple
+  // as two separate households until they reload.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`households_${sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'households', filter: `session_id=eq.${sessionId}` },
+        () => loadHouseholds(),
+      )
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [sessionId, loadHouseholds, supabase]);
 
   const handleAddUser = useCallback(async (newUser: CommuteConstraint) => {
     setIsLoading(true);

@@ -340,7 +340,11 @@ export async function formHousehold(
   memberIds: string[],
 ): Promise<Household> {
   if (!name?.trim()) throw new Invalid('A household needs a name');
-  if (memberIds.length < 2) throw new Invalid('A household needs at least two participants');
+  if (!Array.isArray(memberIds) || memberIds.some((id) => typeof id !== 'string')) {
+    throw new Invalid('memberIds must be a list of participant ids');
+  }
+  const unique = Array.from(new Set(memberIds));
+  if (unique.length < 2) throw new Invalid('A household needs at least two participants');
 
   const db = await createClient();
   const { data, error } = await db
@@ -351,12 +355,23 @@ export async function formHousehold(
   if (error) throw error;
 
   const household = data as unknown as Household;
-  const { error: linkError } = await db
+
+  // The insert and the link are two statements, so the link can match fewer
+  // rows than asked — a stale id, someone removed concurrently, RLS refusing
+  // the write. A household with no members is worse than none: the card would
+  // show "nobody left" while convergence drops it, so the two disagree. Undo.
+  const { data: linked, error: linkError } = await db
     .from('session_users')
     .update({ household_id: household.id } as never)
     .eq('session_id', sessionId)
-    .in('id', memberIds);
-  if (linkError) throw linkError;
+    .in('id', unique)
+    .select('id');
+
+  if (linkError || (linked ?? []).length !== unique.length) {
+    await db.from('households').delete().eq('id', household.id).eq('session_id', sessionId);
+    if (linkError) throw linkError;
+    throw new Invalid('Those participants are no longer all in this session');
+  }
 
   return household;
 }

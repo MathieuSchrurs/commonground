@@ -41,10 +41,13 @@ export interface ConvergenceInput {
 }
 
 export interface Convergence {
-  // Every listing anyone has reacted to — including ones nobody wants, which
-  // belong in neither card. The file picker reads this; the map's shortlist
-  // will once it migrates. Favorites and contested are disjoint subsets.
+  // Every listing anyone has reacted to, including ones nobody wants. The file
+  // picker reads this — a document can matter for a house that was ruled out.
   engaged: ListingConvergence[];
+  // Everything at least one household wants. The map's shortlist reads this;
+  // favorites and contested are disjoint subsets of it, and the gap between
+  // them is the houses only one household is behind so far.
+  considered: ListingConvergence[];
   favorites: ListingConvergence[];
   contested: ListingConvergence[];
 }
@@ -93,6 +96,7 @@ export function computeConvergence({
   const nameOf = new Map(participants.map((p) => [p.id, p.name]));
 
   const engaged: ListingConvergence[] = [];
+  const considered: ListingConvergence[] = [];
   const favorites: ListingConvergence[] = [];
   const contested: ListingConvergence[] = [];
 
@@ -149,6 +153,7 @@ export function computeConvergence({
     // as wanting it, since one of its members loved it.
     const wanted = standings.some((s) => s.position === 'yes' || s.position === 'split');
     if (!wanted) continue;
+    considered.push(entry);
 
     // A listing lands in at most one bucket, decided here and nowhere else —
     // the old code derived the contested list by filtering favorites, which is
@@ -165,8 +170,9 @@ export function computeConvergence({
   // the top row is the debate most worth having.
   const objectingCount = (e: ListingConvergence) => e.standings.filter(isObjecting).length;
 
+  considered.sort((a, b) => b.yesCount - a.yesCount);
   favorites.sort((a, b) => b.yesCount - a.yesCount);
   contested.sort((a, b) => b.yesCount - a.yesCount || objectingCount(a) - objectingCount(b));
 
-  return { engaged, favorites, contested };
+  return { engaged, considered, favorites, contested };
 }

@@ -28,34 +28,44 @@ export default function HouseholdsCard({
 }: HouseholdsCardProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [name, setName] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const unpaired = users.filter((u) => !u.householdId);
   const membersOf = (id: string) => users.filter((u) => u.householdId === id);
 
   const toggle = (id: string) => {
-    setSelected((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      // Offer the obvious name, but let it be overridden.
+    // Computed outside the updater: updaters must be pure, and React replays
+    // them (twice in StrictMode) — a setName in there could clobber a name the
+    // user typed.
+    const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    setSelected(next);
+    if (!nameTouched) {
       const names = next.map((i) => users.find((u) => u.id === i)?.name).filter(Boolean);
       setName(names.join(' & '));
-      return next;
-    });
+    }
   };
 
   const pair = async () => {
     setBusy(true);
+    setError(null);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/households`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, memberIds: selected }),
       });
-      if (res.ok) {
-        setSelected([]);
-        setName('');
-        onChanged();
+      if (!res.ok) {
+        setError((await res.json().catch(() => null))?.error ?? 'Could not pair those two');
+        return;
       }
+      setSelected([]);
+      setName('');
+      setNameTouched(false);
+      onChanged();
+    } catch {
+      setError('Could not reach the server');
     } finally {
       setBusy(false);
     }
@@ -63,11 +73,18 @@ export default function HouseholdsCard({
 
   const unpairHousehold = async (householdId: string) => {
     setBusy(true);
+    setError(null);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/households/${householdId}`, {
         method: 'DELETE',
       });
-      if (res.ok) onChanged();
+      if (!res.ok) {
+        setError((await res.json().catch(() => null))?.error ?? 'Could not unpair');
+        return;
+      }
+      onChanged();
+    } catch {
+      setError('Could not reach the server');
     } finally {
       setBusy(false);
     }
@@ -83,13 +100,15 @@ export default function HouseholdsCard({
           Households
         </CardTitle>
         <span className="text-xs font-mono tabular-nums text-muted-foreground">
-          {households.length + unpaired.length}
+          {households.filter((h) => membersOf(h.id).length > 0).length + unpaired.length}
         </span>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-xs text-muted-foreground">
           Whoever decides together counts as one. Anyone unpaired decides alone.
         </p>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
 
         {households.map((h) => (
           <div
@@ -134,7 +153,7 @@ export default function HouseholdsCard({
               <div className="flex gap-2 pt-1">
                 <Input
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => { setName(e.target.value); setNameTouched(true); }}
                   placeholder="Household name"
                   className="h-8 text-sm"
                 />

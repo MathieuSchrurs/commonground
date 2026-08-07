@@ -250,6 +250,24 @@ describe('computeConvergence', () => {
     expect(result.favorites[0].unanimous).toBe(true);
   });
 
+  it('considers a listing one household loves, even though it is not yet a favorite', () => {
+    const result = computeConvergence({
+      listings: [listing('a'), listing('b')],
+      reactions: [
+        reaction('a', 'u1', 'love'), // wanted by one household, nothing against
+        reaction('b', 'u3', 'object'), // nobody wants it
+      ],
+      participants,
+      households,
+    });
+
+    // The map's shortlist shows everything anyone wants; the dashboard's
+    // favorites card is stricter. Neither should lose this house entirely.
+    expect(result.considered.map((e) => e.listing.id)).toEqual(['a']);
+    expect(result.favorites).toEqual([]);
+    expect(result.contested).toEqual([]);
+  });
+
   it('names who loves and who objects inside each household', () => {
     const result = computeConvergence({
       listings: [listing('a')],
@@ -283,7 +301,7 @@ describe('computeConvergence', () => {
       households,
     });
 
-    expect(result).toEqual({ engaged: [], favorites: [], contested: [] });
+    expect(result).toEqual({ engaged: [], considered: [], favorites: [], contested: [] });
   });
 
   // The deploy-day safety property: households land as a nullable column, so
