@@ -11,9 +11,10 @@ import { join } from 'node:path';
 // neighbours" reads the neighbour that was written first.
 //
 // This test fails when a table with a session_id keeps a permissive policy that
-// nothing later tightens. The two known-open tables are listed below; the list
-// may shrink, never grow.
-const KNOWN_OPEN = new Set(['meeting_items', 'session_todos']);
+// nothing later tightens. The list is empty as of 20260813 — every
+// session-scoped table is membership-scoped. It may never grow: a new table
+// that needs an exception needs a reason, in writing, here.
+const KNOWN_OPEN = new Set<string>();
 
 const MIGRATIONS = join(process.cwd(), 'supabase', 'migrations');
 
@@ -101,13 +102,16 @@ describe('row-level security ratchet', () => {
     expect([...new Set(open)]).toEqual([]);
   });
 
-  it('keeps the known-open list from growing', () => {
+  it('has no exceptions left to justify', () => {
+    // Every entry here is a session-scoped table anyone can read and write.
+    // Empty is the goal state; a new entry needs a written reason above.
+    expect([...KNOWN_OPEN]).toEqual([]);
+
+    // And nothing may be listed that is already tightened — a stale exception
+    // would silently re-open a table the day someone loosened it again.
     const stillOpen = new Set(
       [...active.values()].filter((p) => p.permissive && scoped.has(p.table)).map((p) => p.table),
     );
-    for (const table of KNOWN_OPEN) {
-      // Remove an entry from KNOWN_OPEN once it is tightened; never add one.
-      expect(stillOpen).toContain(table);
-    }
+    for (const table of KNOWN_OPEN) expect(stillOpen).toContain(table);
   });
 });
