@@ -131,7 +131,7 @@ export default function DecisionsSection({
           placeholder={supersedesId ? 'What replaces it?' : 'e.g. max €650k'}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') record(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !busy && text.trim()) record(); }}
         />
         <Button size="sm" onClick={record} disabled={busy || !text.trim()}>
           {supersedesId ? 'Replace' : 'Record'}

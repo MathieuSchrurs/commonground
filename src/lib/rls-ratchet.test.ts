@@ -10,23 +10,57 @@ import { join } from 'node:path';
 // `session_todos`/`meeting_items`, and `households` — because "match the
 // neighbours" reads the neighbour that was written first.
 //
-// This test fails when a table with a session_id gets a permissive policy that
+// This test fails when a table with a session_id keeps a permissive policy that
 // nothing later tightens. The two known-open tables are listed below; the list
 // may shrink, never grow.
 const KNOWN_OPEN = new Set(['meeting_items', 'session_todos']);
 
 const MIGRATIONS = join(process.cwd(), 'supabase', 'migrations');
 
+// `USING (true)` lets anyone read and `WITH CHECK (true)` lets anyone write, so
+// either one alone leaves the table open — a policy reading rows by membership
+// but accepting any insert is still a way into someone else's session.
+function isPermissive(body: string): boolean {
+  return /\busing\s*\(\s*true\s*\)/i.test(body) || /\bwith\s+check\s*\(\s*true\s*\)/i.test(body);
+}
+
+// Policy names may or may not be quoted; both forms are legal SQL and a future
+// migration using the bare form must not slip past the replay.
+const NAME = String.raw`(?:"([^"]+)"|([a-zA-Z_]\w*))`;
+const createRe = new RegExp(String.raw`create\s+policy\s+${NAME}\s+on\s+([\w."]+)([\s\S]*?);`, 'gi');
+const dropRe = new RegExp(
+  String.raw`drop\s+policy\s+(?:if\s+exists\s+)?${NAME}\s+on\s+([\w."]+)`,
+  'gi',
+);
+
+const clean = (t: string) => t.replace(/"/g, '').replace(/^public\./, '');
+
 // Every table declaring a session_id — the ones whose rows belong to one hunt
-// and must therefore be readable only by that hunt's members.
+// and must therefore be reachable only by that hunt's members.
 function sessionScopedTables(sql: string): Set<string> {
   const found = new Set<string>();
   const re = /create\s+table\s+(?:if\s+not\s+exists\s+)?([\w.]+)\s*\(([\s\S]*?)\n\);/gi;
   for (const [, table, body] of sql.matchAll(re)) {
-    if (/\bsession_id\b/i.test(body)) found.add(table.replace(/^public\./, ''));
+    if (/\bsession_id\b/i.test(body)) found.add(clean(table));
   }
   return found;
 }
+
+describe('permissive policy detection', () => {
+  it('flags a policy that reads or writes without a membership check', () => {
+    expect(isPermissive('for all using (true) with check (true)')).toBe(true);
+    expect(isPermissive('for select using (true)')).toBe(true);
+    // Reads by membership but accepts any write — still a way in.
+    expect(isPermissive('for all using (public.is_member(session_id)) with check (true)')).toBe(true);
+  });
+
+  it('accepts a policy scoped to membership on both sides', () => {
+    expect(
+      isPermissive('for all using (public.is_member(session_id)) with check (public.is_member(session_id))'),
+    ).toBe(false);
+    expect(isPermissive('for select using (auth.uid() is not null)')).toBe(false);
+  });
+});
 
 describe('row-level security ratchet', () => {
   const files = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort();
@@ -40,14 +74,13 @@ describe('row-level security ratchet', () => {
   for (const sql of all) {
     for (const t of sessionScopedTables(sql)) scoped.add(t);
 
-    for (const [, name, table] of sql.matchAll(/drop\s+policy\s+(?:if\s+exists\s+)?"([^"]+)"\s+on\s+([\w.]+)/gi)) {
-      active.delete(`${table.replace(/^public\./, '')}::${name}`);
+    for (const [, quoted, bare, table] of sql.matchAll(dropRe)) {
+      active.delete(`${clean(table)}::${quoted ?? bare}`);
     }
 
-    for (const [, name, table, body] of sql.matchAll(/create\s+policy\s+"([^"]+)"\s+on\s+([\w.]+)([\s\S]*?);/gi)) {
-      const t = table.replace(/^public\./, '');
-      const permissive = /using\s*\(\s*true\s*\)/i.test(body);
-      active.set(`${t}::${name}`, { table: t, permissive });
+    for (const [, quoted, bare, table, body] of sql.matchAll(createRe)) {
+      const t = clean(table);
+      active.set(`${t}::${quoted ?? bare}`, { table: t, permissive: isPermissive(body) });
     }
   }
 
@@ -57,10 +90,10 @@ describe('row-level security ratchet', () => {
     expect(scoped).toContain('households');
     expect(scoped).toContain('session_users');
     expect(scoped).toContain('listing_reactions');
-    expect(scoped).toContain('session_todos');
+    expect(scoped).toContain('session_decisions');
   });
 
-  it('leaves no session-scoped table readable by anyone holding a session id', () => {
+  it('leaves no session-scoped table reachable by anyone holding a session id', () => {
     const open = [...active.values()]
       .filter((p) => p.permissive && scoped.has(p.table) && !KNOWN_OPEN.has(p.table))
       .map((p) => p.table);

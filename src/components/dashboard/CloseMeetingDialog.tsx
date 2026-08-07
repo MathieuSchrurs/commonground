@@ -10,6 +10,7 @@ type Outcome = 'agreed' | 'todo' | 'drop';
 interface CloseMeetingDialogProps {
   items: MeetingItem[];
   busy: boolean;
+  error: string | null;
   onCancel: () => void;
   onClose: (decisions: string[], todos: string[]) => void;
 }
@@ -20,17 +21,23 @@ interface CloseMeetingDialogProps {
 export default function CloseMeetingDialog({
   items,
   busy,
+  error,
   onCancel,
   onClose,
 }: CloseMeetingDialogProps) {
-  const [outcomes, setOutcomes] = useState<Record<string, Outcome>>(
-    Object.fromEntries(items.map((i) => [i.id, i.done ? 'agreed' : 'todo'])),
-  );
+  // Explicit choices only. Anything the user hasn't touched falls back to its
+  // default *at submit time* — items can still arrive over realtime while this
+  // is open, and closing deletes the whole agenda, so an item with no entry
+  // here must not silently become neither a decision nor a todo.
+  const [chosen, setChosen] = useState<Record<string, Outcome>>({});
   const [extra, setExtra] = useState('');
 
+  const outcomeOf = (item: MeetingItem): Outcome =>
+    chosen[item.id] ?? (item.done ? 'agreed' : 'todo');
+
   const submit = () => {
-    const decisions = items.filter((i) => outcomes[i.id] === 'agreed').map((i) => i.text);
-    const todos = items.filter((i) => outcomes[i.id] === 'todo').map((i) => i.text);
+    const decisions = items.filter((i) => outcomeOf(i) === 'agreed').map((i) => i.text);
+    const todos = items.filter((i) => outcomeOf(i) === 'todo').map((i) => i.text);
     if (extra.trim()) decisions.push(extra.trim());
     onClose(decisions, todos);
   };
@@ -44,6 +51,8 @@ export default function CloseMeetingDialog({
   return (
     <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
       <p className="text-sm font-medium">What came out of it?</p>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
 
       {items.length === 0 ? (
         <p className="text-xs text-muted-foreground">
@@ -60,9 +69,9 @@ export default function CloseMeetingDialog({
                     key={o.value}
                     type="button"
                     size="sm"
-                    variant={outcomes[item.id] === o.value ? 'default' : 'outline'}
+                    variant={outcomeOf(item) === o.value ? 'default' : 'outline'}
                     className="h-6 px-2 text-xs"
-                    onClick={() => setOutcomes((prev) => ({ ...prev, [item.id]: o.value }))}
+                    onClick={() => setChosen((prev) => ({ ...prev, [item.id]: o.value }))}
                   >
                     {o.label}
                   </Button>

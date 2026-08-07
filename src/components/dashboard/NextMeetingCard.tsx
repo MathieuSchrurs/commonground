@@ -62,6 +62,7 @@ export default function NextMeetingCard({
   const [newItem, setNewItem] = useState('');
   const [closing, setClosing] = useState(false);
   const [closingBusy, setClosingBusy] = useState(false);
+  const [closingError, setClosingError] = useState<string | null>(null);
 
   const nameOf = new Map(users.map((u) => [u.id, u.name]));
   const doneCount = items.filter((i) => i.done).length;
@@ -195,12 +196,19 @@ export default function NextMeetingCard({
               <CloseMeetingDialog
                 items={items}
                 busy={closingBusy}
-                onCancel={() => setClosing(false)}
+                error={closingError}
+                onCancel={() => { setClosing(false); setClosingError(null); }}
                 onClose={async (decisions, todos) => {
                   setClosingBusy(true);
+                  setClosingError(null);
                   try {
                     await onCloseMeeting(decisions, todos);
                     setClosing(false);
+                  } catch (err) {
+                    // Stay open on failure: nothing was recorded and the agenda
+                    // is untouched, so silently dismissing would tell the user
+                    // the meeting closed when it did not.
+                    setClosingError(err instanceof Error ? err.message : 'Could not close the meeting');
                   } finally {
                     setClosingBusy(false);
                   }

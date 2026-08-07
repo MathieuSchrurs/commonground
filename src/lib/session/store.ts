@@ -369,7 +369,17 @@ export async function formHousehold(
     .select('id');
 
   if (linkError || (linked ?? []).length !== unique.length) {
-    await db.from('households').delete().eq('id', household.id).eq('session_id', sessionId);
+    const { error: undoError } = await db
+      .from('households')
+      .delete()
+      .eq('id', household.id)
+      .eq('session_id', sessionId);
+
+    // If the undo itself fails, say so rather than blaming the participants —
+    // a member-less household row is now sitting there reading "nobody left".
+    if (undoError) {
+      throw new Invalid('Could not pair those two, and cleaning up the half-made household failed');
+    }
     if (linkError) throw linkError;
     throw new Invalid('Those participants are no longer all in this session');
   }
@@ -429,7 +439,14 @@ export async function recordDecision(
       .update({ superseded_by: decision.id } as never)
       .eq('id', supersedesId)
       .eq('session_id', sessionId);
-    if (linkError) throw linkError;
+
+    // Two statements again: without undoing the insert, a failed link leaves
+    // the replacement standing next to the original it was meant to retire,
+    // and retrying makes a third.
+    if (linkError) {
+      await db.from('session_decisions').delete().eq('id', decision.id).eq('session_id', sessionId);
+      throw linkError;
+    }
   }
 
   return decision;

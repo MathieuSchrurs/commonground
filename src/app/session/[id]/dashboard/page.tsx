@@ -45,19 +45,28 @@ export default function DashboardPage() {
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [myHouseholdId, setMyHouseholdId] = useState<string | null>(null);
 
-  // "Who am I" is the participant linked to the signed-in account.
-  useEffect(() => {
-    fetch(`/api/sessions/${sessionId}/me`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const me = d?.participant ?? null;
-        setMyUserId(me?.id ?? null);
-        // Unpaired, they are a household of one keyed by their own id — which
-        // is exactly the unit id convergence builds for them.
-        setMyHouseholdId(me ? me.householdId ?? me.id : null);
-      })
-      .catch(() => {});
+  // "Who am I" is the participant linked to the signed-in account. Re-read
+  // whenever pairing changes: being put into a household changes which unit id
+  // this person's standings carry, and a stale one matches nothing.
+  const loadMe = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/me`);
+      if (!res.ok) return;
+      const me = (await res.json())?.participant ?? null;
+      setMyUserId(me?.id ?? null);
+      // Unpaired, they are a household of one keyed by their own id — which is
+      // exactly the unit id convergence builds for them.
+      setMyHouseholdId(me ? me.householdId ?? me.id : null);
+    } catch {
+      // Non-fatal: the personal slot stays as it was
+    }
   }, [sessionId]);
+
+  useEffect(() => {
+    // Async IIFE for the same reason as the initial load below: the setStates
+    // must run in the fetch's callback, not synchronously in the effect.
+    void (async () => { await loadMe(); })();
+  }, [loadMe]);
 
   const loadUsers = useCallback(async () => {
     const res = await fetch(`/api/sessions/${sessionId}`);
@@ -147,10 +156,10 @@ export default function DashboardPage() {
       // joining or leaving changes the denominator — both re-rank the cards.
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'households', filter: `session_id=eq.${sessionId}` },
-        () => loadConvergence())
+        () => { loadConvergence(); loadMe(); })
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'session_users', filter: `session_id=eq.${sessionId}` },
-        () => { loadConvergence(); loadUsers(); })
+        () => { loadConvergence(); loadUsers(); loadMe(); })
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'meeting_items', filter: `session_id=eq.${sessionId}` },
         () => loadMeetingItems())
@@ -162,7 +171,7 @@ export default function DashboardPage() {
         () => loadDecisions())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadUsers, loadMeetingItems, loadTodos, loadDecisions, supabase]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadUsers, loadMe, loadMeetingItems, loadTodos, loadDecisions, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {
@@ -202,9 +211,13 @@ export default function DashboardPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decisions, todos, by: myUserId }),
     });
-    if (res.ok) {
-      await Promise.all([loadMeetingItems(), loadDecisions(), loadTodos()]);
+    if (!res.ok) {
+      // Throw so the dialog stays open and says so — a close that failed left
+      // the agenda intact and recorded nothing.
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? 'Could not close the meeting');
     }
+    await Promise.all([loadMeetingItems(), loadDecisions(), loadTodos()]);
   }, [sessionId, myUserId, loadMeetingItems, loadDecisions, loadTodos]);
 
   // Any house anyone has reacted to, not just the converging ones — a survey
