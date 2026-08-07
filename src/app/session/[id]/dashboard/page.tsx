@@ -6,7 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import { Meeting } from '@/types/meeting';
 import { SharedFile, Folder } from '@/types/files';
 import { MeetingItem, Todo } from '@/types/todos';
-import { Favorite, computeSplitVotes } from '@/lib/favorites';
+import { Convergence } from '@/lib/convergence';
 import SessionHeader from '@/components/SessionHeader';
 import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
 import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
@@ -29,7 +29,11 @@ export default function DashboardPage() {
 
   const [users, setUsers] = useState<SessionUser[]>([]);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [convergence, setConvergence] = useState<Convergence>({
+    engaged: [],
+    favorites: [],
+    contested: [],
+  });
   const [files, setFiles] = useState<SharedFile[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [items, setItems] = useState<MeetingItem[]>([]);
@@ -57,9 +61,9 @@ export default function DashboardPage() {
     if (res.ok) setMeeting((await res.json()).meeting ?? null);
   }, [sessionId]);
 
-  const loadFavorites = useCallback(async () => {
-    const res = await fetch(`/api/sessions/${sessionId}/favorites`);
-    if (res.ok) setFavorites((await res.json()).favorites ?? []);
+  const loadConvergence = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/convergence`);
+    if (res.ok) setConvergence(await res.json());
   }, [sessionId]);
 
   const loadFiles = useCallback(async () => {
@@ -95,14 +99,14 @@ export default function DashboardPage() {
       await Promise.all([
         loadUsers(),
         loadMeeting(),
-        loadFavorites(),
+        loadConvergence(),
         loadFiles(),
         loadFolders(),
         loadMeetingItems(),
         loadTodos(),
       ]);
     })();
-  }, [loadUsers, loadMeeting, loadFavorites, loadFiles, loadFolders, loadMeetingItems, loadTodos]);
+  }, [loadUsers, loadMeeting, loadConvergence, loadFiles, loadFolders, loadMeetingItems, loadTodos]);
 
   // Live updates: refetch the (small) affected set when others change it.
   useEffect(() => {
@@ -119,7 +123,7 @@ export default function DashboardPage() {
         () => loadFolders())
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'listing_reactions', filter: `session_id=eq.${sessionId}` },
-        () => loadFavorites())
+        () => loadConvergence())
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'meeting_items', filter: `session_id=eq.${sessionId}` },
         () => loadMeetingItems())
@@ -128,7 +132,7 @@ export default function DashboardPage() {
         () => loadTodos())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadFavorites, loadMeetingItems, loadTodos, supabase]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadMeetingItems, loadTodos, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {
@@ -159,13 +163,12 @@ export default function DashboardPage() {
     await fetch(`/api/sessions/${sessionId}/meeting-items/${id}`, { method: 'DELETE' });
   }, [sessionId]);
 
-  // Files can be linked to any house the group has reacted to.
-  const houseOptions = favorites.map((f) => ({
-    id: f.listing.id!,
-    label: f.listing.address ?? f.listing.city ?? f.listing.title ?? f.listing.url,
+  // Any house anyone has reacted to, not just the converging ones — a survey
+  // report matters most for the house the group is arguing about.
+  const houseOptions = convergence.engaged.map((e) => ({
+    id: e.listing.id!,
+    label: e.listing.address ?? e.listing.city ?? e.listing.title ?? e.listing.url,
   }));
-
-  const splits = computeSplitVotes(favorites);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -194,8 +197,8 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-          <GroupFavoritesCard favorites={favorites} />
-          <SplitVotesCard splits={splits} />
+          <GroupFavoritesCard favorites={convergence.favorites} />
+          <SplitVotesCard contested={convergence.contested} />
         </div>
 
         <SharedFilesCard

@@ -1,12 +1,14 @@
 'use client';
 
 import React from 'react';
-import { ExternalLink, Heart, MessageCircleWarning, X } from 'lucide-react';
-import { Favorite } from '@/lib/favorites';
+import { ExternalLink, MessageCircleWarning } from 'lucide-react';
+import { ListingConvergence } from '@/lib/convergence';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import HouseholdStandings from './HouseholdStandings';
 
 interface SplitVotesCardProps {
-  splits: Favorite[];
+  contested: ListingConvergence[];
 }
 
 function formatPrice(price?: number): string {
@@ -14,10 +16,10 @@ function formatPrice(price?: number): string {
   return `€${price.toLocaleString('nl-BE')}`;
 }
 
-// Houses the group disagrees on: someone loves it, someone objects. This is
-// the signal that drives the conversation, so it gets its own card on the
-// dashboard rather than a line inside group favorites.
-export default function SplitVotesCard({ splits }: SplitVotesCardProps) {
+// Houses with an objection still standing, closest to consensus first — so the
+// top row is the debate most worth having. An objection is an opening position,
+// not a kill: these houses stay alive until the group decides otherwise.
+export default function SplitVotesCard({ contested }: SplitVotesCardProps) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -25,15 +27,17 @@ export default function SplitVotesCard({ splits }: SplitVotesCardProps) {
           <MessageCircleWarning className="h-4 w-4" />
           To talk about
         </CardTitle>
-        <span className="text-xs font-mono tabular-nums text-muted-foreground">{splits.length}</span>
+        <span className="text-xs font-mono tabular-nums text-muted-foreground">
+          {contested.length}
+        </span>
       </CardHeader>
       <CardContent className="space-y-2">
-        {splits.length === 0 ? (
+        {contested.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No disagreements yet — everyone who&apos;s reacted is on the same page.
+            No objections outstanding — everyone who&apos;s reacted is on the same page.
           </p>
         ) : (
-          splits.map(({ listing, loveNames, objectNames }) => (
+          contested.map(({ listing, standings, yesCount }) => (
             <a
               key={listing.id}
               href={listing.url}
@@ -45,21 +49,15 @@ export default function SplitVotesCard({ splits }: SplitVotesCardProps) {
                 <span className="text-sm font-semibold font-mono tabular-nums">
                   {formatPrice(listing.price)}
                 </span>
+                <Badge variant="secondary" className="gap-1">
+                  {yesCount} of {standings.length} in
+                </Badge>
                 <ExternalLink className="h-3 w-3 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
               <div className="text-xs text-muted-foreground truncate mt-0.5">
                 {listing.address ?? listing.city ?? listing.title ?? listing.url}
               </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs">
-                <span className="flex items-center gap-1 text-rose-600">
-                  <Heart className="h-3 w-3 fill-current" />
-                  {loveNames.join(', ')}
-                </span>
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <X className="h-3 w-3" />
-                  {objectNames.join(', ')}
-                </span>
-              </div>
+              <HouseholdStandings standings={standings} />
             </a>
           ))
         )}

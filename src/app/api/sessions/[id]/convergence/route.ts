@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
-import { computeFavorites } from '@/lib/favorites';
+import { computeConvergence } from '@/lib/convergence';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 
-// Houses the group has reacted to, ranked by hearts. Derived from existing
-// listing_reactions joined to property_listings — same logic as the map's
-// Shortlist (see src/lib/favorites.ts).
+// Where the group stands, by household: every listing anyone has reacted to,
+// partitioned into favorites (converging) and contested (still arguing). The
+// dashboard's cards read this; see src/lib/convergence.ts for the rules.
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -24,11 +24,11 @@ export async function GET(
     if (usersRes.error) throw usersRes.error;
 
     const reactions = (reactionsRes.data ?? []) as unknown as ListingReaction[];
-    const users = (usersRes.data ?? []) as unknown as { id: string; name: string }[];
+    const participants = (usersRes.data ?? []) as unknown as { id: string; name: string }[];
 
     const listingIds = Array.from(new Set(reactions.map((r) => r.listing_id)));
     if (listingIds.length === 0) {
-      return NextResponse.json({ favorites: [] });
+      return NextResponse.json({ engaged: [], favorites: [], contested: [] });
     }
 
     const { data: listings, error: listingsError } = await supabase
@@ -38,15 +38,18 @@ export async function GET(
 
     if (listingsError) throw listingsError;
 
-    const favorites = computeFavorites(
-      (listings ?? []) as unknown as PropertyListing[],
-      reactions,
-      users,
+    // Households don't exist in the schema yet, so every participant resolves
+    // as a household of one — which reproduces person-level behaviour exactly.
+    return NextResponse.json(
+      computeConvergence({
+        listings: (listings ?? []) as unknown as PropertyListing[],
+        reactions,
+        participants,
+        households: [],
+      }),
     );
-
-    return NextResponse.json({ favorites });
   } catch (error) {
-    console.error('Error fetching favorites:', error);
-    return NextResponse.json({ error: 'Failed to fetch favorites' }, { status: 500 });
+    console.error('Error computing convergence:', error);
+    return NextResponse.json({ error: 'Failed to compute convergence' }, { status: 500 });
   }
 }
