@@ -44,3 +44,10 @@ export function computeFavorites(
     })
     .sort((a, b) => b.loveCount - a.loveCount);
 }
+
+// The houses the group is split on — loved by someone and vetoed by someone
+// else. The dashboard's conflict card is built from this; when a house shows
+// up here it is the debate worth having next.
+export function computeSplitVotes(favorites: Favorite[]): Favorite[] {
+  return favorites.filter((f) => f.vetoNames.length > 0);
+}

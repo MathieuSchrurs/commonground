@@ -1,17 +1,25 @@
 'use client';
 
 import React, { useState } from 'react';
-import { CalendarClock, MapPin, Pencil } from 'lucide-react';
+import { CalendarClock, ListChecks, MapPin, Pencil, Trash2 } from 'lucide-react';
 import { Meeting } from '@/types/meeting';
+import { MeetingItem } from '@/types/todos';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Separator } from '@/components/ui/separator';
 
 interface NextMeetingCardProps {
   meeting: Meeting | null;
   canEdit: boolean; // false until an identity is picked
   onSave: (meetsAt: string, location: string, note: string) => Promise<void>;
+  items: MeetingItem[];
+  users: { id: string; name: string }[];
+  onAddItem: (text: string) => Promise<void>;
+  onToggleItem: (id: string, done: boolean) => Promise<void>;
+  onDeleteItem: (id: string) => Promise<void>;
 }
 
 // An ISO timestamp -> the "YYYY-MM-DDTHH:mm" a datetime-local input expects,
@@ -33,12 +41,25 @@ function formatWhen(iso: string): string {
   });
 }
 
-export default function NextMeetingCard({ meeting, canEdit, onSave }: NextMeetingCardProps) {
+export default function NextMeetingCard({
+  meeting,
+  canEdit,
+  onSave,
+  items,
+  users,
+  onAddItem,
+  onToggleItem,
+  onDeleteItem,
+}: NextMeetingCardProps) {
   const [editing, setEditing] = useState(false);
   const [meetsAt, setMeetsAt] = useState('');
   const [location, setLocation] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [newItem, setNewItem] = useState('');
+
+  const nameOf = new Map(users.map((u) => [u.id, u.name]));
+  const doneCount = items.filter((i) => i.done).length;
 
   const startEdit = () => {
     setMeetsAt(toLocalInput(meeting?.meets_at ?? null));
@@ -59,6 +80,12 @@ export default function NextMeetingCard({ meeting, canEdit, onSave }: NextMeetin
     }
   };
 
+  const handleAddItem = async () => {
+    if (!newItem.trim()) return;
+    await onAddItem(newItem.trim());
+    setNewItem('');
+  };
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -73,7 +100,7 @@ export default function NextMeetingCard({ meeting, canEdit, onSave }: NextMeetin
           </Button>
         )}
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         {editing ? (
           <div className="space-y-3">
             <div className="space-y-1.5">
@@ -128,6 +155,73 @@ export default function NextMeetingCard({ meeting, canEdit, onSave }: NextMeetin
             No meeting planned yet.{canEdit ? ' Click “Set” to pin one.' : ' Pick who you are to set one.'}
           </p>
         )}
+
+        <Separator />
+
+        {/* Agenda for the next meeting, editable by anyone in the group. */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+              <ListChecks className="h-3.5 w-3.5" />
+              Agenda
+            </span>
+            {items.length > 0 && (
+              <span className="text-xs font-mono tabular-nums text-muted-foreground">
+                {doneCount}/{items.length}
+              </span>
+            )}
+          </div>
+
+          {items.length === 0 ? (
+            <p className="text-sm text-muted-foreground mb-2">
+              Nothing on the agenda yet.{canEdit ? ' Add what to discuss.' : ''}
+            </p>
+          ) : (
+            <ul className="space-y-1 mb-2">
+              {items.map((item) => (
+                <li key={item.id} className="group flex items-center gap-2 rounded-md border border-border p-2 text-sm">
+                  <Checkbox
+                    checked={item.done}
+                    onCheckedChange={(v) => onToggleItem(item.id, v === true)}
+                    aria-label={item.done ? 'Mark as open' : 'Mark as done'}
+                  />
+                  <span className={`flex-1 min-w-0 ${item.done ? 'line-through text-muted-foreground' : ''}`}>
+                    {item.text}
+                  </span>
+                  {item.created_by && (
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {nameOf.get(item.created_by) ?? '?'}
+                    </span>
+                  )}
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => onDeleteItem(item.id)}
+                      aria-label={`Delete ${item.text}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {canEdit && (
+            <div className="flex gap-2">
+              <Input
+                placeholder="Add an agenda item"
+                value={newItem}
+                onChange={(e) => setNewItem(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }}
+              />
+              <Button size="sm" variant="ghost" onClick={handleAddItem} disabled={!newItem.trim()}>
+                Add
+              </Button>
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

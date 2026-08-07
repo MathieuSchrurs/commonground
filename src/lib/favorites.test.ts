@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeFavorites } from './favorites';
+import { computeFavorites, computeSplitVotes } from './favorites';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 
@@ -81,5 +81,37 @@ describe('computeFavorites', () => {
     );
     expect(result[0].loveNames).toEqual(['Anna']);
     expect(result[0].vetoNames).toEqual(['Tom']);
+  });
+});
+
+describe('computeSplitVotes', () => {
+  it('returns only houses loved by some and vetoed by others', () => {
+    const favorites = computeFavorites(
+      [listing('a'), listing('b')],
+      [
+        reaction('a', 'u1', 'love'),
+        reaction('a', 'u2', 'veto'),
+        reaction('b', 'u1', 'love'),
+        reaction('b', 'u2', 'love'),
+      ],
+      users,
+    );
+    const splits = computeSplitVotes(favorites);
+    expect(splits.map((f) => f.listing.id)).toEqual(['a']);
+  });
+
+  it('keeps the order given and returns an empty list when everyone agrees', () => {
+    const favorites = computeFavorites(
+      [listing('a'), listing('b')],
+      [
+        reaction('a', 'u1', 'love'),
+        reaction('a', 'u2', 'love'),
+        reaction('b', 'u1', 'love'),
+        reaction('b', 'u2', 'veto'),
+      ],
+      users,
+    );
+    expect(computeSplitVotes(favorites).map((f) => f.listing.id)).toEqual(['b']);
+    expect(computeSplitVotes([])).toEqual([]);
   });
 });

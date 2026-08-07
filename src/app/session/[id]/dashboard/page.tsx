@@ -5,10 +5,13 @@ import { useParams } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
 import { Meeting } from '@/types/meeting';
 import { SharedFile, Folder } from '@/types/files';
-import { Favorite } from '@/lib/favorites';
+import { MeetingItem, Todo } from '@/types/todos';
+import { Favorite, computeSplitVotes } from '@/lib/favorites';
 import SessionHeader from '@/components/SessionHeader';
 import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
 import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
+import SplitVotesCard from '@/components/dashboard/SplitVotesCard';
+import TodosCard from '@/components/dashboard/TodosCard';
 import SharedFilesCard from '@/components/dashboard/SharedFilesCard';
 
 interface SessionUser {
@@ -29,6 +32,8 @@ export default function DashboardPage() {
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [files, setFiles] = useState<SharedFile[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [items, setItems] = useState<MeetingItem[]>([]);
+  const [todos, setTodos] = useState<Todo[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
 
   // "Who am I" is the participant linked to the signed-in account.
@@ -67,6 +72,16 @@ export default function DashboardPage() {
     if (res.ok) setFolders((await res.json()).folders ?? []);
   }, [sessionId]);
 
+  const loadMeetingItems = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/meeting-items`);
+    if (res.ok) setItems((await res.json()).items ?? []);
+  }, [sessionId]);
+
+  const loadTodos = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/todos`);
+    if (res.ok) setTodos((await res.json()).todos ?? []);
+  }, [sessionId]);
+
   // A single "something in the hub changed" reload for the files card.
   const reloadHub = useCallback(() => {
     loadFiles();
@@ -83,9 +98,11 @@ export default function DashboardPage() {
         loadFavorites(),
         loadFiles(),
         loadFolders(),
+        loadMeetingItems(),
+        loadTodos(),
       ]);
     })();
-  }, [loadUsers, loadMeeting, loadFavorites, loadFiles, loadFolders]);
+  }, [loadUsers, loadMeeting, loadFavorites, loadFiles, loadFolders, loadMeetingItems, loadTodos]);
 
   // Live updates: refetch the (small) affected set when others change it.
   useEffect(() => {
@@ -103,9 +120,15 @@ export default function DashboardPage() {
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'listing_reactions', filter: `session_id=eq.${sessionId}` },
         () => loadFavorites())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'meeting_items', filter: `session_id=eq.${sessionId}` },
+        () => loadMeetingItems())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'session_todos', filter: `session_id=eq.${sessionId}` },
+        () => loadTodos())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadFavorites, supabase]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadFavorites, loadMeetingItems, loadTodos, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {
@@ -116,11 +139,33 @@ export default function DashboardPage() {
     if (res.ok) setMeeting((await res.json()).meeting);
   }, [sessionId, myUserId]);
 
+  const handleAddMeetingItem = useCallback(async (text: string) => {
+    await fetch(`/api/sessions/${sessionId}/meeting-items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, createdBy: myUserId }),
+    });
+  }, [sessionId, myUserId]);
+
+  const handleToggleMeetingItem = useCallback(async (id: string, done: boolean) => {
+    await fetch(`/api/sessions/${sessionId}/meeting-items/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ done }),
+    });
+  }, [sessionId]);
+
+  const handleDeleteMeetingItem = useCallback(async (id: string) => {
+    await fetch(`/api/sessions/${sessionId}/meeting-items/${id}`, { method: 'DELETE' });
+  }, [sessionId]);
+
   // Files can be linked to any house the group has reacted to.
   const houseOptions = favorites.map((f) => ({
     id: f.listing.id!,
     label: f.listing.address ?? f.listing.city ?? f.listing.title ?? f.listing.url,
   }));
+
+  const splits = computeSplitVotes(favorites);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -129,8 +174,28 @@ export default function DashboardPage() {
       <main className="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 py-6 space-y-4">
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-          <NextMeetingCard meeting={meeting} canEdit={!!myUserId} onSave={handleSaveMeeting} />
+          <NextMeetingCard
+            meeting={meeting}
+            canEdit={!!myUserId}
+            onSave={handleSaveMeeting}
+            items={items}
+            users={users}
+            onAddItem={handleAddMeetingItem}
+            onToggleItem={handleToggleMeetingItem}
+            onDeleteItem={handleDeleteMeetingItem}
+          />
+          <TodosCard
+            sessionId={sessionId}
+            todos={todos}
+            users={users}
+            myUserId={myUserId}
+            onChanged={loadTodos}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <GroupFavoritesCard favorites={favorites} />
+          <SplitVotesCard splits={splits} />
         </div>
 
         <SharedFilesCard
