@@ -40,11 +40,49 @@ camel↔snake mapping and the session-scoping/typed-error invariant. Routes are
 thin shells over it.
 _Avoid_: repository, DAO, service.
 
+**Household**:
+The unit that decides — usually one couple. A session of three couples has six
+participants (six commutes, because six jobs) but three households, and it is
+households, not people, that have to agree on a house. A participant who
+belongs to no household is a household of one, so the count is never zero and a
+solo co-buyer is a first-class case.
+_Avoid_: couple, family, team, party.
+
 **Commute constraint**:
 One participant's requirement — an address plus a time budget and transport mode
 — that produces an isochrone. Stored in `session_users` (the in-session presence
 of an account, via `account_id`); the domain type is `CommuteConstraint`.
 _Avoid_: user, member, person.
+
+### Meeting and record
+
+**Meeting**:
+The group's next get-together — one per session, with a time, a place, and an
+agenda. Closing it clears the agenda and writes what was agreed into decisions.
+_Avoid_: event, appointment, call.
+
+**Agenda item**:
+One thing to raise at the next meeting. Transient by design: it lives until the
+meeting is closed, then it is either resolved or carried forward.
+_Avoid_: meeting item, topic, note.
+
+**Decision**:
+Something the group has agreed and now treats as settled — "max €650k", "not
+west of Ghent". It has a date and an author, it constrains the hunt from then
+on, and it can be superseded but never completed. Not a todo.
+_Avoid_: agreement, rule, conclusion.
+
+**Todo**:
+A piece of work someone has to do — assignable, and done or not done. Unlike a
+decision, it disappears from the group's attention once it is finished.
+_Avoid_: task, chore, action item.
+
+**Needs you**:
+What the hunt is waiting on from the viewer specifically — their open todos,
+listings their household is still silent on, agenda items they raised. Silence
+is what stalls a hunt, so this is the dashboard asking for the missing input
+rather than reporting what already happened.
+_Avoid_: activity, notifications, inbox.
 
 ### Places
 
@@ -69,11 +107,36 @@ _Avoid_: scraper (the code), site, provider.
 ### Converging
 
 **Reaction**:
-A participant's `love` or `veto` on a listing. Re-applying the same reaction
+A participant's `love` or `object` on a listing. Re-applying the same reaction
 removes it; a different one replaces it.
 _Avoid_: vote, like, rating.
 
+**Objection**:
+The negative reaction — an opening position that needs answering, not a kill
+switch. A listing stays alive and visible while objections stand; removing it
+from the hunt is a deliberate group act, never the side effect of one reaction.
+_Avoid_: veto, downvote, dislike, block.
+
+**Household position**:
+Where one household stands on one listing, derived from its members' reactions:
+_yes_, _split_, _no_, or _silent_. A split household is an unresolved
+conversation inside the couple, not a rejection. Silence does not block — one
+partner speaks for the household until the other contradicts them, which is
+exactly what turns the position into _split_.
+_Avoid_: household vote, couple verdict, stance.
+
 **Favorite**:
-A listing the group has reacted to, surfaced and ranked for the shortlist and
-dashboard. Derived from reactions.
+A listing two or more households are _yes_ on and no one has objected to — the
+uncontested front of the hunt, ranked by how many households are in. Derived
+from household positions, not from raw reaction counts.
 _Avoid_: shortlist item, pick, bookmark.
+
+**Unanimous**:
+Every household is _yes_ on a listing and none is _silent_ — the strongest
+signal the hunt can produce, and deliberately rare.
+_Avoid_: consensus, everyone, full house.
+
+**Contested listing**:
+A listing with an objection still standing. Ranked by how close it is to
+consensus, it is the group's real agenda — the houses worth meeting about.
+_Avoid_: split vote, conflict, disputed.

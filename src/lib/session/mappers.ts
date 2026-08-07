@@ -13,6 +13,7 @@ export interface SessionUserRow {
   longitude: number;
   max_minutes: number;
   transport_mode: TransportMode;
+  household_id?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -26,5 +27,6 @@ export function toCommuteConstraint(row: SessionUserRow): CommuteConstraint {
     longitude: row.longitude,
     maxMinutes: row.max_minutes,
     transportMode: row.transport_mode,
+    householdId: row.household_id ?? null,
   };
 }

@@ -1,18 +1,20 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { ExternalLink, Heart, X } from 'lucide-react';
+import { ExternalLink, Heart, MessageCircleWarning } from 'lucide-react';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 import { CommuteConstraint } from '@/types/user';
-import { computeFavorites } from '@/lib/favorites';
+import { computeConvergence, Household } from '@/lib/convergence';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import HouseholdStandings from '@/components/dashboard/HouseholdStandings';
 
 interface ShortlistPanelProps {
   properties: PropertyListing[];
   reactions: ListingReaction[];
   users: CommuteConstraint[];
+  households?: Household[];
 }
 
 function formatPrice(price?: number): string {
@@ -20,13 +22,27 @@ function formatPrice(price?: number): string {
   return `€${price.toLocaleString('nl-BE')}`;
 }
 
-// The convergence view: every listing at least one person has hearted,
-// ranked by heart count, with unanimous picks called out.
-export default function ShortlistPanel({ properties, reactions, users }: ShortlistPanelProps) {
-  const shortlist = useMemo(
-    () => computeFavorites(properties, reactions, users),
-    [properties, reactions, users],
-  );
+// The map's convergence view, reading the same household positions as the
+// dashboard so the two surfaces can never disagree about what the group
+// thinks. Converging houses first, then the ones still being argued over.
+export default function ShortlistPanel({
+  properties,
+  reactions,
+  users,
+  households = [],
+}: ShortlistPanelProps) {
+  const shortlist = useMemo(() => {
+    const { considered, contested } = computeConvergence({
+      listings: properties,
+      reactions,
+      participants: users,
+      households,
+    });
+    // Everything anyone wants, not just what has reached favorite status — a
+    // house the group is still warming to must not vanish off the map.
+    const arguing = new Set(contested.map((e) => e.listing.id));
+    return considered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
+  }, [properties, reactions, users, households]);
 
   if (shortlist.length === 0) return null;
 
@@ -39,7 +55,7 @@ export default function ShortlistPanel({ properties, reactions, users }: Shortli
         </span>
       </CardHeader>
       <CardContent className="space-y-2">
-        {shortlist.map(({ listing, loveNames, vetoNames, unanimous }) => (
+        {shortlist.map(({ entry: { listing, standings, yesCount, unanimous }, contested }) => (
           <a
             key={listing.id}
             href={listing.url}
@@ -56,10 +72,20 @@ export default function ShortlistPanel({ properties, reactions, users }: Shortli
                   {listing.price < listing.previous_price ? '↓' : '↑'} was {formatPrice(listing.previous_price)}
                 </span>
               )}
-              {unanimous && (
+              {unanimous ? (
                 <Badge className="gap-1 bg-amber-500 text-white hover:bg-amber-500">
                   <Heart className="h-3 w-3 fill-current" />
-                  everyone
+                  every household
+                </Badge>
+              ) : contested ? (
+                <Badge variant="secondary" className="gap-1">
+                  <MessageCircleWarning className="h-3 w-3" />
+                  {yesCount} of {standings.length}
+                </Badge>
+              ) : (
+                <Badge variant="secondary" className="gap-1">
+                  <Heart className="h-3 w-3 fill-current text-rose-600" />
+                  {yesCount} of {standings.length}
                 </Badge>
               )}
               <ExternalLink className="h-3 w-3 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -67,18 +93,7 @@ export default function ShortlistPanel({ properties, reactions, users }: Shortli
             <div className="text-xs text-muted-foreground truncate mt-0.5">
               {listing.address ?? listing.city ?? listing.title ?? listing.url}
             </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs">
-              <span className="flex items-center gap-1 text-rose-600">
-                <Heart className="h-3 w-3 fill-current" />
-                {loveNames.join(', ')}
-              </span>
-              {vetoNames.length > 0 && (
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <X className="h-3 w-3" />
-                  {vetoNames.join(', ')}
-                </span>
-              )}
-            </div>
+            <HouseholdStandings standings={standings} />
           </a>
         ))}
       </CardContent>

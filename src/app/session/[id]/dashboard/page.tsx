@@ -6,13 +6,15 @@ import { createClient } from '@/utils/supabase/client';
 import { Meeting } from '@/types/meeting';
 import { SharedFile, Folder } from '@/types/files';
 import { MeetingItem, Todo } from '@/types/todos';
-import { Favorite, computeSplitVotes } from '@/lib/favorites';
+import { Decision } from '@/types/decisions';
+import { Convergence } from '@/lib/convergence';
 import SessionHeader from '@/components/SessionHeader';
 import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
 import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
 import SplitVotesCard from '@/components/dashboard/SplitVotesCard';
 import TodosCard from '@/components/dashboard/TodosCard';
 import SharedFilesCard from '@/components/dashboard/SharedFilesCard';
+import NeedsYouCard from '@/components/dashboard/NeedsYouCard';
 
 interface SessionUser {
   id: string;
@@ -29,20 +31,42 @@ export default function DashboardPage() {
 
   const [users, setUsers] = useState<SessionUser[]>([]);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [convergence, setConvergence] = useState<Convergence>({
+    engaged: [],
+    considered: [],
+    favorites: [],
+    contested: [],
+  });
   const [files, setFiles] = useState<SharedFile[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [items, setItems] = useState<MeetingItem[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [myHouseholdId, setMyHouseholdId] = useState<string | null>(null);
 
-  // "Who am I" is the participant linked to the signed-in account.
-  useEffect(() => {
-    fetch(`/api/sessions/${sessionId}/me`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setMyUserId(d?.participant?.id ?? null))
-      .catch(() => {});
+  // "Who am I" is the participant linked to the signed-in account. Re-read
+  // whenever pairing changes: being put into a household changes which unit id
+  // this person's standings carry, and a stale one matches nothing.
+  const loadMe = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/me`);
+      if (!res.ok) return;
+      const me = (await res.json())?.participant ?? null;
+      setMyUserId(me?.id ?? null);
+      // Unpaired, they are a household of one keyed by their own id — which is
+      // exactly the unit id convergence builds for them.
+      setMyHouseholdId(me ? me.householdId ?? me.id : null);
+    } catch {
+      // Non-fatal: the personal slot stays as it was
+    }
   }, [sessionId]);
+
+  useEffect(() => {
+    // Async IIFE for the same reason as the initial load below: the setStates
+    // must run in the fetch's callback, not synchronously in the effect.
+    void (async () => { await loadMe(); })();
+  }, [loadMe]);
 
   const loadUsers = useCallback(async () => {
     const res = await fetch(`/api/sessions/${sessionId}`);
@@ -57,9 +81,11 @@ export default function DashboardPage() {
     if (res.ok) setMeeting((await res.json()).meeting ?? null);
   }, [sessionId]);
 
-  const loadFavorites = useCallback(async () => {
-    const res = await fetch(`/api/sessions/${sessionId}/favorites`);
-    if (res.ok) setFavorites((await res.json()).favorites ?? []);
+  const loadConvergence = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/convergence`);
+    // Spread over the defaults: engaged is dereferenced in the render body, so
+    // a response missing it would blank the whole dashboard, not just a card.
+    if (res.ok) setConvergence({ engaged: [], considered: [], favorites: [], contested: [], ...(await res.json()) });
   }, [sessionId]);
 
   const loadFiles = useCallback(async () => {
@@ -82,6 +108,11 @@ export default function DashboardPage() {
     if (res.ok) setTodos((await res.json()).todos ?? []);
   }, [sessionId]);
 
+  const loadDecisions = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/decisions`);
+    if (res.ok) setDecisions((await res.json()).decisions ?? []);
+  }, [sessionId]);
+
   // A single "something in the hub changed" reload for the files card.
   const reloadHub = useCallback(() => {
     loadFiles();
@@ -95,14 +126,15 @@ export default function DashboardPage() {
       await Promise.all([
         loadUsers(),
         loadMeeting(),
-        loadFavorites(),
+        loadConvergence(),
         loadFiles(),
         loadFolders(),
         loadMeetingItems(),
         loadTodos(),
+        loadDecisions(),
       ]);
     })();
-  }, [loadUsers, loadMeeting, loadFavorites, loadFiles, loadFolders, loadMeetingItems, loadTodos]);
+  }, [loadUsers, loadMeeting, loadConvergence, loadFiles, loadFolders, loadMeetingItems, loadTodos, loadDecisions]);
 
   // Live updates: refetch the (small) affected set when others change it.
   useEffect(() => {
@@ -119,16 +151,27 @@ export default function DashboardPage() {
         () => loadFolders())
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'listing_reactions', filter: `session_id=eq.${sessionId}` },
-        () => loadFavorites())
+        () => loadConvergence())
+      // Pairing changes what every heart counts for, and a participant
+      // joining or leaving changes the denominator — both re-rank the cards.
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'households', filter: `session_id=eq.${sessionId}` },
+        () => { loadConvergence(); loadMe(); })
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'session_users', filter: `session_id=eq.${sessionId}` },
+        () => { loadConvergence(); loadUsers(); loadMe(); })
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'meeting_items', filter: `session_id=eq.${sessionId}` },
         () => loadMeetingItems())
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'session_todos', filter: `session_id=eq.${sessionId}` },
         () => loadTodos())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'session_decisions', filter: `session_id=eq.${sessionId}` },
+        () => loadDecisions())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadFavorites, loadMeetingItems, loadTodos, supabase]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadUsers, loadMe, loadMeetingItems, loadTodos, loadDecisions, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {
@@ -159,19 +202,44 @@ export default function DashboardPage() {
     await fetch(`/api/sessions/${sessionId}/meeting-items/${id}`, { method: 'DELETE' });
   }, [sessionId]);
 
-  // Files can be linked to any house the group has reacted to.
-  const houseOptions = favorites.map((f) => ({
-    id: f.listing.id!,
-    label: f.listing.address ?? f.listing.city ?? f.listing.title ?? f.listing.url,
-  }));
+  // Closing records the outcomes and clears the agenda in one server-side
+  // operation, so a failure can never wipe the agenda without keeping the
+  // decisions. Refresh what it touched.
+  const handleCloseMeeting = useCallback(async (decisions: string[], todos: string[]) => {
+    const res = await fetch(`/api/sessions/${sessionId}/meeting/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decisions, todos, by: myUserId }),
+    });
+    if (!res.ok) {
+      // Throw so the dialog stays open and says so — a close that failed left
+      // the agenda intact and recorded nothing.
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? 'Could not close the meeting');
+    }
+    await Promise.all([loadMeetingItems(), loadDecisions(), loadTodos()]);
+  }, [sessionId, myUserId, loadMeetingItems, loadDecisions, loadTodos]);
 
-  const splits = computeSplitVotes(favorites);
+  // Any house anyone has reacted to, not just the converging ones — a survey
+  // report matters most for the house the group is arguing about.
+  const houseOptions = convergence.engaged.map((e) => ({
+    id: e.listing.id!,
+    label: e.listing.address ?? e.listing.city ?? e.listing.title ?? e.listing.url,
+  }));
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <SessionHeader sessionId={sessionId} />
 
       <main className="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 py-6 space-y-4">
+
+        <NeedsYouCard
+          convergence={convergence}
+          todos={todos}
+          items={items}
+          myUserId={myUserId}
+          myHouseholdId={myHouseholdId}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <NextMeetingCard
@@ -183,6 +251,7 @@ export default function DashboardPage() {
             onAddItem={handleAddMeetingItem}
             onToggleItem={handleToggleMeetingItem}
             onDeleteItem={handleDeleteMeetingItem}
+            onCloseMeeting={handleCloseMeeting}
           />
           <TodosCard
             sessionId={sessionId}
@@ -190,12 +259,14 @@ export default function DashboardPage() {
             users={users}
             myUserId={myUserId}
             onChanged={loadTodos}
+            decisions={decisions}
+            onDecisionsChanged={loadDecisions}
           />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-          <GroupFavoritesCard favorites={favorites} />
-          <SplitVotesCard splits={splits} />
+          <GroupFavoritesCard favorites={convergence.favorites} />
+          <SplitVotesCard contested={convergence.contested} />
         </div>
 
         <SharedFilesCard

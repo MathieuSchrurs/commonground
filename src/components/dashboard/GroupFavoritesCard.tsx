@@ -1,13 +1,14 @@
 'use client';
 
 import React from 'react';
-import { ExternalLink, Heart, Star, X } from 'lucide-react';
-import { Favorite } from '@/lib/favorites';
+import { ExternalLink, Heart, Star } from 'lucide-react';
+import { ListingConvergence } from '@/lib/convergence';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import HouseholdStandings from './HouseholdStandings';
 
 interface GroupFavoritesCardProps {
-  favorites: Favorite[];
+  favorites: ListingConvergence[];
 }
 
 function formatPrice(price?: number): string {
@@ -15,12 +16,10 @@ function formatPrice(price?: number): string {
   return `€${price.toLocaleString('nl-BE')}`;
 }
 
-// The houses the group has converged on, ranked by hearts. Mirrors the map's
-// Shortlist but lives on the dashboard so it's visible without the map open.
+// Where the group is converging: houses two or more households want and nobody
+// has objected to. Anything with a standing objection lives in the contested
+// card instead — the two never show the same house.
 export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProps) {
-  // The interesting signal is shared enthusiasm — surface multi-person loves first.
-  const shared = favorites.filter((f) => f.loveCount >= 2);
-
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -28,16 +27,18 @@ export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProp
           <Star className="h-4 w-4" />
           Group favorites
         </CardTitle>
-        <span className="text-xs font-mono tabular-nums text-muted-foreground">{shared.length}</span>
+        <span className="text-xs font-mono tabular-nums text-muted-foreground">
+          {favorites.length}
+        </span>
       </CardHeader>
       <CardContent className="space-y-2">
-        {shared.length === 0 ? (
+        {favorites.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Nothing loved by more than one person yet. Heart houses on the map and the group&apos;s
+            Nothing more than one household wants yet. Heart houses on the map and the group&apos;s
             shared picks show up here.
           </p>
         ) : (
-          shared.map(({ listing, loveCount, loveNames, vetoNames, unanimous }) => (
+          favorites.map(({ listing, standings, yesCount, unanimous }) => (
             <a
               key={listing.id}
               href={listing.url}
@@ -52,12 +53,12 @@ export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProp
                 {unanimous ? (
                   <Badge className="gap-1 bg-amber-500 text-white hover:bg-amber-500">
                     <Heart className="h-3 w-3 fill-current" />
-                    everyone
+                    every household
                   </Badge>
                 ) : (
                   <Badge variant="secondary" className="gap-1">
                     <Heart className="h-3 w-3 fill-current text-rose-600" />
-                    {loveCount}
+                    {yesCount} of {standings.length}
                   </Badge>
                 )}
                 <ExternalLink className="h-3 w-3 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -65,18 +66,7 @@ export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProp
               <div className="text-xs text-muted-foreground truncate mt-0.5">
                 {listing.address ?? listing.city ?? listing.title ?? listing.url}
               </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs">
-                <span className="flex items-center gap-1 text-rose-600">
-                  <Heart className="h-3 w-3 fill-current" />
-                  {loveNames.join(', ')}
-                </span>
-                {vetoNames.length > 0 && (
-                  <span className="flex items-center gap-1 text-muted-foreground">
-                    <X className="h-3 w-3" />
-                    {vetoNames.join(', ')}
-                  </span>
-                )}
-              </div>
+              <HouseholdStandings standings={standings} />
             </a>
           ))
         )}

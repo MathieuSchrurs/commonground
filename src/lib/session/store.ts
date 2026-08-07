@@ -2,16 +2,19 @@
 // domain verbs, returns the project's domain types, and owns the session-scoping
 // and typed-error invariants. API routes are thin shells over these functions.
 //
-// Grows one aggregate at a time. Currently: sessions, users, reactions.
+// Grows one aggregate at a time. Currently: sessions, users, households,
+// reactions, decisions.
 
 import { createClient } from '@/utils/supabase/server';
 import { CommuteConstraint } from '@/types/user';
+import { Household } from '@/types/household';
+import { Decision } from '@/types/decisions';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
 import { resolveToggle } from './reactions';
 import { SessionUserRow, toCommuteConstraint } from './mappers';
 
-const REACTION_KINDS: ReactionKind[] = ['love', 'veto'];
+const REACTION_KINDS: ReactionKind[] = ['love', 'object'];
 
 // A sessions row — now with a human name, an owner account, and the search
 // buffer percentage applied to the common ground when searching properties.
@@ -317,6 +320,160 @@ export async function removeUser(sessionId: string, userId: string): Promise<voi
   if (error) throw error;
 }
 
+// Every household in a session. A participant belonging to none is a household
+// of one, resolved when convergence is computed rather than stored here.
+export async function listHouseholds(sessionId: string): Promise<Household[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('households')
+    .select('id, name')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Household[];
+}
+
+// Pair participants into one household. Members already in another household
+// move across; that household is left to be dissolved separately if empty.
+export async function formHousehold(
+  sessionId: string,
+  name: string,
+  memberIds: string[],
+): Promise<Household> {
+  if (!name?.trim()) throw new Invalid('A household needs a name');
+  if (!Array.isArray(memberIds) || memberIds.some((id) => typeof id !== 'string')) {
+    throw new Invalid('memberIds must be a list of participant ids');
+  }
+  const unique = Array.from(new Set(memberIds));
+  if (unique.length < 2) throw new Invalid('A household needs at least two participants');
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('households')
+    .insert([{ session_id: sessionId, name: name.trim() } as never])
+    .select('id, name')
+    .single();
+  if (error) throw error;
+
+  const household = data as unknown as Household;
+
+  // The insert and the link are two statements, so the link can match fewer
+  // rows than asked — a stale id, someone removed concurrently, RLS refusing
+  // the write. A household with no members is worse than none: the card would
+  // show "nobody left" while convergence drops it, so the two disagree. Undo.
+  const { data: linked, error: linkError } = await db
+    .from('session_users')
+    .update({ household_id: household.id } as never)
+    .eq('session_id', sessionId)
+    .in('id', unique)
+    .select('id');
+
+  if (linkError || (linked ?? []).length !== unique.length) {
+    const { error: undoError } = await db
+      .from('households')
+      .delete()
+      .eq('id', household.id)
+      .eq('session_id', sessionId);
+
+    // If the undo itself fails, say so rather than blaming the participants —
+    // a member-less household row is now sitting there reading "nobody left".
+    if (undoError) {
+      throw new Invalid('Could not pair those two, and cleaning up the half-made household failed');
+    }
+    if (linkError) throw linkError;
+    throw new Invalid('Those participants are no longer all in this session');
+  }
+
+  return household;
+}
+
+// Dissolve a household, returning its members to households of one. The
+// household_id foreign key is ON DELETE SET NULL, so people are never deleted.
+export async function dissolveHousehold(sessionId: string, householdId: string): Promise<void> {
+  const db = await createClient();
+  const { error } = await db
+    .from('households')
+    .delete()
+    .eq('id', householdId)
+    .eq('session_id', sessionId);
+  if (error) throw error;
+}
+
+// The group's decisions, oldest first — the order they were agreed in is the
+// order they read in.
+export async function listDecisions(sessionId: string): Promise<Decision[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_decisions')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Decision[];
+}
+
+// Record something the group has agreed. Optionally supersedes an earlier
+// decision, which stays on the record rather than being deleted — changing
+// your mind is history, not an edit.
+export async function recordDecision(
+  sessionId: string,
+  text: string,
+  decidedBy: string | null,
+  supersedesId?: string | null,
+): Promise<Decision> {
+  if (!text?.trim()) throw new Invalid('A decision needs some text');
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_decisions')
+    .insert([{ session_id: sessionId, text: text.trim(), decided_by: decidedBy ?? null } as never])
+    .select('*')
+    .single();
+  if (error) throw error;
+
+  const decision = data as unknown as Decision;
+
+  if (supersedesId) {
+    const { error: linkError } = await db
+      .from('session_decisions')
+      .update({ superseded_by: decision.id } as never)
+      .eq('id', supersedesId)
+      .eq('session_id', sessionId);
+
+    // Two statements again: without undoing the insert, a failed link leaves
+    // the replacement standing next to the original it was meant to retire,
+    // and retrying makes a third.
+    if (linkError) {
+      await db.from('session_decisions').delete().eq('id', decision.id).eq('session_id', sessionId);
+      throw linkError;
+    }
+  }
+
+  return decision;
+}
+
+// Close the meeting: write what was agreed and what still needs doing, then
+// clear the agenda — in one operation, so a failure can never leave the group
+// with a wiped agenda and no record of why.
+export async function closeMeeting(
+  sessionId: string,
+  decisions: string[],
+  todos: string[],
+  by: string | null,
+): Promise<void> {
+  const clean = (xs: unknown) =>
+    Array.isArray(xs) ? xs.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
+
+  const db = await createClient();
+  const { error } = await db.rpc('close_meeting', {
+    p_session_id: sessionId,
+    p_decisions: clean(decisions),
+    p_todos: clean(todos),
+    p_by: by ?? null,
+  } as never);
+  if (error) throw error;
+}
+
 // Every reaction in a session.
 export async function listReactions(sessionId: string): Promise<ListingReaction[]> {
   const db = await createClient();
@@ -338,7 +495,7 @@ export async function toggleReaction(
   reaction: ReactionKind,
 ): Promise<ListingReaction | null> {
   if (!listingId || !userId) throw new Invalid('listingId and userId are required');
-  if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or veto');
+  if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or object');
 
   const db = await createClient();
   const { data: existing, error: fetchError } = await db

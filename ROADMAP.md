@@ -32,8 +32,8 @@ The actual "common ground": converging as a group.
 
 - [x] Identity: pick "who am I" per browser (localStorage, no login — fine for
       six people who trust each other).
-- [x] Love / veto reactions per person per listing, synced realtime.
-- [x] Pin styling: gold ring = loved, grayed out = vetoed by someone.
+- [x] Love / object reactions per person per listing, synced realtime.
+- [x] Pin styling: gold ring = loved, grayed out = objected to by someone.
 - [x] Shortlist panel: listings ranked by hearts, "everyone loves this" called out.
 - [ ] Comments per listing ("garden is north-facing", "viewed it, smells of damp").
 - [ ] Status pipeline: new → shortlisted → visit planned → visited → offer / rejected.

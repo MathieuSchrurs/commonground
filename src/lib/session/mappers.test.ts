@@ -22,6 +22,35 @@ describe('toCommuteConstraint', () => {
       longitude: 3.72,
       maxMinutes: 30,
       transportMode: 'cycling',
+      householdId: null,
     });
+  });
+
+  it('carries the household a participant decides as', () => {
+    const row: SessionUserRow = {
+      id: 'u1',
+      name: 'Anna',
+      address: 'Gent',
+      latitude: 51.05,
+      longitude: 3.72,
+      max_minutes: 30,
+      transport_mode: 'cycling',
+      household_id: 'h1',
+    };
+    expect(toCommuteConstraint(row).householdId).toBe('h1');
+  });
+
+  it('reads an unpaired participant as belonging to no household', () => {
+    const row: SessionUserRow = {
+      id: 'u1',
+      name: 'Anna',
+      address: 'Gent',
+      latitude: 51.05,
+      longitude: 3.72,
+      max_minutes: 30,
+      transport_mode: 'cycling',
+    };
+    // Null, not undefined: a household of one is a real state, not missing data.
+    expect(toCommuteConstraint(row).householdId).toBeNull();
   });
 });

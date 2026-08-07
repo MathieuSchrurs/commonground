@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
@@ -14,6 +14,9 @@ import UserList from '@/components/UserList';
 import ZoneLegend from '@/components/ZoneLegend';
 import SessionHeader from '@/components/SessionHeader';
 import ShortlistPanel from '@/components/ShortlistPanel';
+import HouseholdsCard from '@/components/HouseholdsCard';
+import { Household } from '@/types/household';
+import { computeConvergence } from '@/lib/convergence';
 import { Button } from '@/components/ui/button';
 import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
 
@@ -60,6 +63,7 @@ export default function SessionPage() {
   const [supabase] = useState(() => createClient());
 
   const [users, setUsers] = useState<CommuteConstraint[]>([]);
+  const [households, setHouseholds] = useState<Household[]>([]);
   const [isochrones, setIsochrones] = useState<Feature<Polygon | MultiPolygon>[]>([]);
   const [intersection, setIntersection] = useState<Feature<Polygon | MultiPolygon> | null>(null);
   const [intersectionArea, setIntersectionArea] = useState<number | null>(null);
@@ -128,6 +132,46 @@ export default function SessionPage() {
   }, [sessionId]);
 
   useEffect(() => { loadReactions(); }, [loadReactions]);
+
+  // Who decides with whom. Pairing changes what every heart counts for, so the
+  // participants are reloaded alongside it.
+  const loadHouseholds = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/households`);
+      if (!res.ok) return;
+      setHouseholds((await res.json()).households ?? []);
+    } catch {
+      // Non-fatal: everyone reads as a household of one until this succeeds
+    }
+  }, [sessionId]);
+
+  const loadUsersAndHouseholds = useCallback(async () => {
+    await loadHouseholds();
+    const res = await fetch(`/api/sessions/${sessionId}`);
+    if (!res.ok) return;
+    const { users: fresh } = (await res.json()) as { users: CommuteConstraint[] };
+    // globalThis.Map — `Map` in this module is the map component.
+    const byId = new globalThis.Map(fresh.map((u) => [u.id, u] as const));
+    // Merge by id rather than replacing wholesale: users and isochrones are
+    // index-parallel (zone colours and marker toggles key off the index), so
+    // reordering here would shift names and colours off their geometries.
+    // Additions and removals arrive through realtime, which keeps both in step.
+    setUsers((prev) => prev.map((u) => byId.get(u.id) ?? u));
+  }, [sessionId, loadHouseholds]);
+
+  useEffect(() => { loadHouseholds(); }, [loadHouseholds]);
+
+  // Which listings every household is yes on. Derived from convergence so the
+  // pin glow, the shortlist and the dashboard can never disagree.
+  const unanimousListingIds = useMemo(() => {
+    const { favorites } = computeConvergence({
+      listings: properties,
+      reactions,
+      participants: users,
+      households,
+    });
+    return new Set(favorites.filter((f) => f.unanimous).map((f) => f.listing.id!));
+  }, [properties, reactions, users, households]);
 
   // Votes from the others land live; refetching the whole (tiny) set is
   // simpler and safer than patching state from realtime payloads
@@ -311,7 +355,36 @@ export default function SessionPage() {
             return;
           }
 
-          const isochrone = await fetchIsochrone(constraint);
+          // Not every UPDATE touches the zone. Pairing into a household writes
+          // household_id on each member, and refetching an isochrone per member
+          // per connected client would burn Mapbox calls and churn the map for
+          // a column that has nothing to do with geometry.
+          if (eventType === 'UPDATE') {
+            const idx = usersRef.current.findIndex(u => u.id === constraint.id);
+            if (idx === -1) return;
+            const prev = usersRef.current[idx];
+            const sameZone =
+              prev.latitude === constraint.latitude &&
+              prev.longitude === constraint.longitude &&
+              prev.maxMinutes === constraint.maxMinutes &&
+              prev.transportMode === constraint.transportMode;
+
+            if (sameZone) {
+              const updatedUsers = [...usersRef.current];
+              updatedUsers[idx] = constraint;
+              setUsers(updatedUsers);
+              return;
+            }
+          }
+
+          // A rate-limited or failed isochrone must not become an unhandled
+          // rejection inside this async callback.
+          let isochrone;
+          try {
+            isochrone = await fetchIsochrone(constraint);
+          } catch {
+            return;
+          }
 
           if (eventType === 'INSERT') {
             // Re-check after the async fetch: a concurrent delivery may have
@@ -341,6 +414,21 @@ export default function SessionPage() {
       subscription.unsubscribe();
     };
   }, [sessionId, fetchIsochrone, computeAndSetIntersection, supabase]);
+
+  // Pairing changes what every heart counts for, so it has to reach the other
+  // participants' screens — otherwise their badges keep counting a new couple
+  // as two separate households until they reload.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`households_${sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'households', filter: `session_id=eq.${sessionId}` },
+        () => loadHouseholds(),
+      )
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [sessionId, loadHouseholds, supabase]);
 
   const handleAddUser = useCallback(async (newUser: CommuteConstraint) => {
     setIsLoading(true);
@@ -622,6 +710,13 @@ export default function SessionPage() {
             properties={properties}
             reactions={reactions}
             users={users}
+            households={households}
+          />
+          <HouseholdsCard
+            sessionId={sessionId}
+            users={users}
+            households={households}
+            onChanged={loadUsersAndHouseholds}
           />
           <ZoneLegend
             users={users}
@@ -654,6 +749,7 @@ export default function SessionPage() {
             myUserId={myUserId}
             onToggleReaction={handleToggleReaction}
             newListingKeys={newListingKeys}
+            unanimousListingIds={unanimousListingIds}
           />
         </div>
       </main>

@@ -24,6 +24,9 @@ interface MapProps {
   onToggleReaction?: (listingId: string, reaction: ReactionKind) => void;
   /** `source:external_id` keys of listings that appeared since the last visit */
   newListingKeys?: Set<string>;
+  /** ids of listings every household is yes on — computed from convergence, so
+   *  a couple's two hearts count once rather than twice */
+  unanimousListingIds?: Set<string>;
 }
 
 interface LayerVisibility {
@@ -103,6 +106,7 @@ export default function Map({
   myUserId = null,
   onToggleReaction,
   newListingKeys,
+  unanimousListingIds,
 }: MapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
@@ -516,7 +520,7 @@ export default function Map({
         </div>
       `;
 
-      // Love/veto controls, re-rendered whenever reactions or identity change
+      // Love/object controls, re-rendered whenever reactions or identity change
       const reactionsEl = document.createElement('div');
       popupEl.appendChild(reactionsEl);
       const renderReactions = () => {
@@ -528,7 +532,7 @@ export default function Map({
         const mine = me ? rs.find(r => r.user_id === me)?.reaction : undefined;
         const nameOf = new globalThis.Map(usersForNamesRef.current.map(u => [u.id, u.name]));
         const loveNames = rs.filter(r => r.reaction === 'love').map(r => nameOf.get(r.user_id) ?? '?');
-        const vetoNames = rs.filter(r => r.reaction === 'veto').map(r => nameOf.get(r.user_id) ?? '?');
+        const objectNames = rs.filter(r => r.reaction === 'object').map(r => nameOf.get(r.user_id) ?? '?');
 
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;';
@@ -546,15 +550,15 @@ export default function Map({
           return btn;
         };
         row.appendChild(makeButton('love', `❤️ Love${loveNames.length ? ` · ${loveNames.length}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
-        row.appendChild(makeButton('veto', `✕ Veto${vetoNames.length ? ` · ${vetoNames.length}` : ''}`, mine === 'veto', '#e4e4e7', '#52525b'));
+        row.appendChild(makeButton('object', `✕ Object${objectNames.length ? ` · ${objectNames.length}` : ''}`, mine === 'object', '#e4e4e7', '#52525b'));
         reactionsEl.appendChild(row);
 
         const note = document.createElement('div');
         note.style.cssText = 'font-size:10px;color:#888;margin-bottom:8px;';
-        if (loveNames.length || vetoNames.length) {
+        if (loveNames.length || objectNames.length) {
           note.textContent = [
             loveNames.length ? `❤️ ${loveNames.join(', ')}` : '',
-            vetoNames.length ? `✕ ${vetoNames.join(', ')}` : '',
+            objectNames.length ? `✕ ${objectNames.join(', ')}` : '',
           ].filter(Boolean).join('  ·  ');
         } else if (!me) {
           note.textContent = 'Pick your name in the sidebar to vote';
@@ -613,9 +617,9 @@ export default function Map({
   }, [reactions, myUserId, users, mapLoaded]);
 
   // Pin styling from group opinion + freshness:
-  //  - vetoed by anyone  → desaturated
+  //  - objected to by anyone → desaturated
   //  - loved by someone  → amber ring
-  //  - loved by everyone → amber ring + glow
+  //  - every household in → amber ring + glow
   //  - new since last visit → blue halo
   useEffect(() => {
     for (const key of Object.keys(propertyMarkersRef.current)) {
@@ -624,14 +628,16 @@ export default function Map({
       if (!dot) continue;
 
       const rs = listing.id ? reactions.filter(r => r.listing_id === listing.id) : [];
-      const vetoed = rs.some(r => r.reaction === 'veto');
+      const objected = rs.some(r => r.reaction === 'object');
       const loves = new Set(rs.filter(r => r.reaction === 'love').map(r => r.user_id));
-      const lovedByAll = users.length > 1 && users.every(u => loves.has(u.id));
+      // Unanimity is a household question, not a headcount — the parent
+      // computes it from convergence so the map and the dashboard agree.
+      const lovedByAll = listing.id ? (unanimousListingIds?.has(listing.id) ?? false) : false;
       const isNew = newListingKeys?.has(key) ?? false;
 
       const approx = listing.location_precision === 'approximate';
       const baseBorderColor = approx ? (SOURCE_COLORS[listing.source] ?? '#6b7280') : 'white';
-      dot.style.filter = vetoed ? 'grayscale(0.85)' : '';
+      dot.style.filter = objected ? 'grayscale(0.85)' : '';
       dot.style.border = loves.size > 0
         ? `2px ${approx ? 'dashed' : 'solid'} #f59e0b`
         : `2px ${approx ? 'dashed' : 'solid'} ${baseBorderColor}`;
@@ -641,7 +647,7 @@ export default function Map({
       if (isNew) shadows.push(`0 0 0 ${lovedByAll ? 8 : 4}px rgba(37,99,235,0.35)`);
       dot.style.boxShadow = shadows.join(', ');
     }
-  }, [reactions, users, newListingKeys, mapLoaded, properties]);
+  }, [reactions, users, newListingKeys, unanimousListingIds, mapLoaded, properties]);
 
   // Apply master toggle + filter visibility — runs after creation, and again
   // whenever any filter changes. Reads always-current state via the ref Map.
