@@ -81,3 +81,31 @@ export function calculateArea(
   }
 }
 
+/**
+ * Grow a polygon by a percentage of its own extent. "10%" buffers by 10% of
+ * the radius of the equal-area circle, so a small zone grows less in absolute
+ * kilometers than a big one — the extension stays proportional to the zone's
+ * size rather than being a fixed kilometer cushion. pct is capped at 20; 0 or
+ * negative returns the polygon unchanged.
+ */
+export function bufferPolygon(
+  polygon: Feature<Polygon | MultiPolygon>,
+  pct: number
+): Feature<Polygon | MultiPolygon> | null {
+  if (!pct || pct <= 0) return polygon;
+  const clamped = Math.min(Math.max(pct, 0), 20);
+
+  try {
+    const areaM2 = turf.area(polygon);
+    const radiusKm = Math.sqrt(areaM2 / Math.PI) / 1000;
+    const distanceKm = radiusKm * (clamped / 100);
+    if (distanceKm <= 0) return polygon;
+
+    const buffered = turf.buffer(polygon, distanceKm, { units: 'kilometers' });
+    return buffered as Feature<Polygon | MultiPolygon> | null;
+  } catch (error) {
+    console.error('Error buffering polygon:', error);
+    return polygon;
+  }
+}
+

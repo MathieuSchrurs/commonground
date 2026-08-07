@@ -3,7 +3,7 @@ import { Feature, Polygon, MultiPolygon } from 'geojson';
 import * as turf from '@turf/turf';
 import { getServiceRoleClient } from '@/lib/supabase';
 import { getIsochrone } from '@/lib/mapbox';
-import { computeIntersection } from '@/lib/geo';
+import { computeIntersection, bufferPolygon } from '@/lib/geo';
 import { refreshListingsForPolygon } from '@/scraper/refresh';
 import { fetchListingsInBbox } from '@/scraper/db';
 
@@ -53,6 +53,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `Failed to load sessions: ${error.message}` }, { status: 500 });
   }
 
+  const { data: sessionRows } = await supabase
+    .from('sessions')
+    .select('id, search_buffer_pct');
+  const bufferBySession = new Map(
+    ((sessionRows ?? []) as { id: string; search_buffer_pct: number }[]).map(s => [
+      s.id,
+      s.search_buffer_pct ?? 0,
+    ])
+  );
+
   // Group users by session, then take the sessions with the most recent
   // activity (someone added/changed a commute lately = session is alive).
   const bySession = new Map<string, SessionUserRow[]>();
@@ -91,16 +101,22 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      const summary = await refreshListingsForPolygon(intersection);
+      // Apply the session's search buffer so the scrape covers the extended zone.
+      const bufferPct = bufferBySession.get(sessionId) ?? 0;
+      const searchZone = bufferPct > 0
+        ? (bufferPolygon(intersection, bufferPct) ?? intersection)
+        : intersection;
+
+      const summary = await refreshListingsForPolygon(searchZone);
 
       // Count listings that appeared for the first time during this run and
       // sit inside the session's zone — the hook for future email alerts.
-      const [minLng, minLat, maxLng, maxLat] = turf.bbox(intersection);
+      const [minLng, minLat, maxLng, maxLat] = turf.bbox(searchZone);
       const stored = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
       const newListings = stored.filter(l =>
         l.first_seen_at && l.first_seen_at >= runStartedAt &&
         l.latitude && l.longitude &&
-        turf.booleanPointInPolygon(turf.point([l.longitude, l.latitude]), intersection)
+        turf.booleanPointInPolygon(turf.point([l.longitude, l.latitude]), searchZone)
       );
 
       results.push({

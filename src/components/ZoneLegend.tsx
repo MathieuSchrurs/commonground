@@ -5,6 +5,7 @@ import { CommuteConstraint } from '@/types/user';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { Slider } from '@/components/ui/slider';
 
 interface ZoneLegendProps {
   users: CommuteConstraint[];
@@ -14,6 +15,8 @@ interface ZoneLegendProps {
   isScraping?: boolean;
   scrapeCompleted?: boolean;
   scrapeError?: string;
+  bufferPct?: number;
+  onBufferChange?: (pct: number) => void;
   onFindProperties?: () => void;
 }
 
@@ -25,6 +28,8 @@ export default function ZoneLegend({
   isScraping = false,
   scrapeCompleted = false,
   scrapeError = '',
+  bufferPct = 0,
+  onBufferChange,
   onFindProperties,
 }: ZoneLegendProps) {
   if (users.length === 0) return null;
@@ -47,6 +52,34 @@ export default function ZoneLegend({
             <p className="text-xs text-muted-foreground mt-2">
               The shaded green zone is where everyone&apos;s commute constraint is satisfied.
             </p>
+
+            {onBufferChange && (
+              <div className="mt-3 space-y-2">
+                <div className="flex items-baseline justify-between">
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                    Search buffer
+                  </div>
+                  <div className="text-xs font-mono tabular-nums text-foreground">
+                    {bufferPct}%
+                  </div>
+                </div>
+                <Slider
+                  min={0}
+                  max={15}
+                  step={1}
+                  value={[bufferPct]}
+                  onValueChange={(v) => {
+                    const n = Array.isArray(v) ? v[0] : Number(v);
+                    onBufferChange(n);
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {bufferPct === 0
+                    ? 'Search only inside the common ground.'
+                    : `Extend the zone and search up to ${bufferPct}% beyond it — houses the whole group can still reach comfortably.`}
+                </p>
+              </div>
+            )}
 
             {onFindProperties && (
               <div className="mt-3 space-y-2">

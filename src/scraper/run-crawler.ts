@@ -25,7 +25,7 @@ config({ path: resolve(process.cwd(), '.env.local') });
 
 import { createClient } from '@supabase/supabase-js';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
-import { computeIntersection, unionPolygons } from '../lib/geo';
+import { computeIntersection, unionPolygons, bufferPolygon } from '../lib/geo';
 import { discoverAreas, Area } from './areas';
 import { refreshListingsForPolygon, RefreshOptions, SourceName } from './refresh';
 
@@ -106,6 +106,18 @@ async function buildSearchPlan(): Promise<SearchPlan | null> {
     .select('session_id, latitude, longitude, max_minutes, transport_mode');
   if (error) throw new Error(`Failed to load sessions: ${error.message}`);
 
+  // Each session's search buffer extends its common zone, so scraped areas
+  // (and the union bounding box) cover the zone the app actually searches.
+  const { data: sessionRows } = await supabase
+    .from('sessions')
+    .select('id, search_buffer_pct');
+  const bufferBySession = new Map(
+    ((sessionRows ?? []) as { id: string; search_buffer_pct: number }[]).map(s => [
+      s.id,
+      s.search_buffer_pct ?? 0,
+    ])
+  );
+
   const bySession = new Map<string, SessionUserRow[]>();
   for (const row of (data ?? []) as SessionUserRow[]) {
     const arr = bySession.get(row.session_id) ?? [];
@@ -133,8 +145,16 @@ async function buildSearchPlan(): Promise<SearchPlan | null> {
       console.log(`[crawler] Session ${sessionId}: no common commute zone — skipped`);
       continue;
     }
-    zones.push(zone);
-    for (const a of await discoverAreas(zone, mapboxToken)) {
+
+    // Apply the session's search buffer before discovering areas, so the
+    // scrape covers the zone just outside the strict overlap too.
+    const bufferPct = bufferBySession.get(sessionId) ?? 0;
+    const searchZone = bufferPct > 0 ? (bufferPolygon(zone, bufferPct) ?? zone) : zone;
+    if (bufferPct > 0) {
+      console.log(`[crawler] Session ${sessionId}: search zone buffered by ${bufferPct}%`);
+    }
+    zones.push(searchZone);
+    for (const a of await discoverAreas(searchZone, mapboxToken)) {
       if (!areasByCode.has(a.postalCode)) areasByCode.set(a.postalCode, a);
     }
   }

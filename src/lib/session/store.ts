@@ -13,11 +13,13 @@ import { SessionUserRow, toCommuteConstraint } from './mappers';
 
 const REACTION_KINDS: ReactionKind[] = ['love', 'veto'];
 
-// A sessions row — now with a human name and an owner account.
+// A sessions row — now with a human name, an owner account, and the search
+// buffer percentage applied to the common ground when searching properties.
 export interface SessionRow {
   id: string;
   name: string | null;
   created_by: string | null;
+  search_buffer_pct: number;
   created_at?: string;
   updated_at?: string;
 }
@@ -144,6 +146,36 @@ export async function renameSession(
   const { data, error } = await db
     .from('sessions')
     .update({ name: name.trim(), updated_at: new Date().toISOString() } as never)
+    .eq('id', sessionId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as SessionRow;
+}
+
+// Set the session's property-search buffer percentage (0-20). The zone shown
+// and searched is extended by this % of its own extent. Members only.
+export async function setSearchBufferPct(
+  sessionId: string,
+  accountId: string,
+  pct: number,
+): Promise<SessionRow> {
+  if (!Number.isInteger(pct) || pct < 0 || pct > 20) {
+    throw new Invalid('Buffer must be an integer between 0 and 20');
+  }
+  const db = await createClient();
+
+  const { data: membership } = await db
+    .from('session_members')
+    .select('account_id')
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .maybeSingle();
+  if (!membership) throw new NotFound('session', sessionId);
+
+  const { data, error } = await db
+    .from('sessions')
+    .update({ search_buffer_pct: pct, updated_at: new Date().toISOString() } as never)
     .eq('id', sessionId)
     .select()
     .single();

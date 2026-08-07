@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Feature, Polygon } from 'geojson';
-import { calculateArea, computeIntersection, unionPolygons } from './geo';
+import * as turf from '@turf/turf';
+import { bufferPolygon, calculateArea, computeIntersection, unionPolygons } from './geo';
 
 function square(minLng: number, minLat: number, size: number): Feature<Polygon> {
   return {
@@ -84,5 +85,35 @@ describe('calculateArea', () => {
     const area = calculateArea(square(3.7, 51.0, 0.1));
     expect(area).toBeGreaterThan(60);
     expect(area).toBeLessThan(100);
+  });
+});
+
+describe('bufferPolygon', () => {
+  it('returns the polygon unchanged at 0%', () => {
+    const a = square(3.7, 51.0, 0.1);
+    expect(bufferPolygon(a, 0)).toBe(a);
+    expect(bufferPolygon(a, -5)).toBe(a);
+  });
+
+  it('grows the area when pct > 0', () => {
+    const a = square(3.7, 51.0, 0.1);
+    const buffered = bufferPolygon(a, 10);
+    expect(buffered).not.toBeNull();
+    expect(calculateArea(buffered!)).toBeGreaterThan(calculateArea(a));
+  });
+
+  it('keeps every point of the original inside the buffer', () => {
+    const a = square(3.7, 51.0, 0.1);
+    const buffered = bufferPolygon(a, 10)!;
+    for (const [lng, lat] of a.geometry.coordinates[0]) {
+      expect(turf.booleanPointInPolygon(turf.point([lng, lat]), buffered)).toBe(true);
+    }
+  });
+
+  it('caps the percentage so a huge pct cannot explode the zone', () => {
+    const a = square(3.7, 51.0, 0.1);
+    const buffered = bufferPolygon(a, 99)!;
+    // Capped at 20% radius extension — far below the naive 99% growth.
+    expect(calculateArea(buffered)).toBeLessThan(calculateArea(a) * 3);
   });
 });

@@ -708,7 +708,10 @@ export default function Map({
     });
   }, [visibility.intersection, mapLoaded]);
 
-  // Render isochrones + intersection
+  // Render isochrone layers — rebuilt only when the participant set changes.
+  // Intersection is handled separately below so a search-buffer change (new
+  // intersection geometry, same participants) updates in place instead of
+  // tearing these layers down and re-fitting the camera on every slider tick.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
@@ -723,11 +726,6 @@ export default function Map({
       if (map.current?.getLayer(id)) map.current.removeLayer(id);
     });
     if (map.current.getSource('isochrones-combined')) map.current.removeSource('isochrones-combined');
-
-    ['intersection-fill', 'intersection-outline', 'intersection-fade', 'intersection-outline-dash'].forEach(id => {
-      if (map.current?.getLayer(id)) map.current.removeLayer(id);
-    });
-    if (map.current.getSource('intersection')) map.current.removeSource('intersection');
 
     isochrones.forEach((isochrone, index) => {
       const color = COLORS[index % COLORS.length];
@@ -766,8 +764,23 @@ export default function Map({
       map.current?.setFilter('isochrones-fade', combinedFilter);
       map.current?.setFilter('isochrones-outline-dash', combinedFilter);
     }
+  }, [isochrones, mapLoaded]);
+
+  // Intersection layers — create once (fitting the camera), then update the
+  // source data in place so the green zone morphs smoothly when the search
+  // buffer changes instead of blinking out and re-fitting.
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const hasSource = !!map.current.getSource('intersection');
 
     if (intersection) {
+      if (hasSource) {
+        (map.current.getSource('intersection') as mapboxgl.GeoJSONSource)
+          .setData(intersection);
+        return;
+      }
+
       const intersectionVisible = visibilityRef.current.intersection ? 'visible' : 'none';
       map.current.addSource('intersection', { type: 'geojson', data: intersection });
       map.current.addLayer({ id: 'intersection-fill', type: 'fill', source: 'intersection', layout: { visibility: intersectionVisible }, paint: { 'fill-color': '#22c55e', 'fill-opacity': 0 } });
@@ -783,12 +796,22 @@ export default function Map({
         (coords as number[][][][]).forEach((polygon) => polygon[0].forEach((coord) => bounds.extend([coord[0], coord[1]])));
       }
       if (!bounds.isEmpty()) map.current.fitBounds(bounds, { padding: 50 });
-    } else if (users.length > 0) {
+      return;
+    }
+
+    // No intersection: tear down the layers. If there are still participants
+    // (their zones simply don't overlap), frame them instead.
+    ['intersection-fill', 'intersection-outline', 'intersection-fade', 'intersection-outline-dash'].forEach(id => {
+      if (map.current?.getLayer(id)) map.current.removeLayer(id);
+    });
+    if (map.current.getSource('intersection')) map.current.removeSource('intersection');
+
+    if (users.length > 0) {
       const bounds = new mapboxgl.LngLatBounds();
       users.forEach((user) => bounds.extend([user.longitude, user.latitude]));
       map.current.fitBounds(bounds, { padding: 100 });
     }
-  }, [users, isochrones, intersection, mapLoaded]);
+  }, [intersection, users, mapLoaded]);
 
   if (!mapboxToken) {
     return (

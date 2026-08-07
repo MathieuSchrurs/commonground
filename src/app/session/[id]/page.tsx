@@ -63,6 +63,10 @@ export default function SessionPage() {
   const [isochrones, setIsochrones] = useState<Feature<Polygon | MultiPolygon>[]>([]);
   const [intersection, setIntersection] = useState<Feature<Polygon | MultiPolygon> | null>(null);
   const [intersectionArea, setIntersectionArea] = useState<number | null>(null);
+  // Search buffer: extend the common ground by this % when searching, so the
+  // group can look at houses just outside the strict overlap. Persisted per
+  // session so the crawler scrapes the same extended zone.
+  const [bufferPct, setBufferPct] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [editingUser, setEditingUser] = useState<CommuteConstraint | null>(null);
@@ -77,8 +81,10 @@ export default function SessionPage() {
   // Refs so the realtime callback always sees current state without stale closures
   const usersRef = useRef<CommuteConstraint[]>([]);
   const isochronesRef = useRef<Feature<Polygon | MultiPolygon>[]>([]);
+  const bufferPctRef = useRef(0);
   useEffect(() => { usersRef.current = users; }, [users]);
   useEffect(() => { isochronesRef.current = isochrones; }, [isochrones]);
+  useEffect(() => { bufferPctRef.current = bufferPct; }, [bufferPct]);
 
   // "Who am I" is the participant linked to the signed-in account — no picking.
   useEffect(() => {
@@ -175,9 +181,14 @@ export default function SessionPage() {
 
   // Intersection is computed on the server (turf stays off the client bundle
   // and off the main thread). Fire-and-forget: a failure just leaves the last
-  // known intersection in place.
+  // known intersection in place. The returned geometry is the buffered zone
+  // when a search buffer is set, so the map and the property search agree on
+  // the same extended common ground.
   const computeIntersectionOnServer = useCallback(
-    async (isochrones: Feature<Polygon | MultiPolygon>[]): Promise<{
+    async (
+      isochrones: Feature<Polygon | MultiPolygon>[],
+      bufferPct = 0
+    ): Promise<{
       intersection: Feature<Polygon | MultiPolygon> | null;
       area: number | null;
     }> => {
@@ -185,11 +196,14 @@ export default function SessionPage() {
         const res = await fetch('/api/intersection', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ isochrones }),
+          body: JSON.stringify({ isochrones, bufferPct }),
         });
         if (!res.ok) return { intersection: null, area: null };
         const data = await res.json();
-        return { intersection: data.intersection ?? null, area: data.areaKm2 ?? null };
+        return {
+          intersection: data.bufferedIntersection ?? data.intersection ?? null,
+          area: data.bufferedAreaKm2 ?? data.areaKm2 ?? null,
+        };
       } catch {
         return { intersection: null, area: null };
       }
@@ -199,7 +213,10 @@ export default function SessionPage() {
 
   const computeAndSetIntersection = useCallback(
     async (updatedIsochrones: Feature<Polygon | MultiPolygon>[]) => {
-      const { intersection, area } = await computeIntersectionOnServer(updatedIsochrones);
+      const { intersection, area } = await computeIntersectionOnServer(
+        updatedIsochrones,
+        bufferPctRef.current
+      );
       setIntersection(intersection);
       setIntersectionArea(area);
     },
@@ -224,18 +241,25 @@ export default function SessionPage() {
         }
 
         // The store returns participants already as CommuteConstraints.
-        const { users: constraints } = await response.json() as { users: CommuteConstraint[] };
+        const { users: constraints, session } = await response.json() as {
+          users: CommuteConstraint[];
+          session?: { search_buffer_pct?: number };
+        };
         setUsers(constraints);
+
+        // The persisted search buffer (if any) extends the zone from the start.
+        const buffer = Math.max(0, Math.min(15, session?.search_buffer_pct ?? 0));
+        setBufferPct(buffer);
 
         // Fetch isochrones for all users
         const isochronePromises = constraints.map(fetchIsochrone);
         const isochroneData = await Promise.all(isochronePromises);
         setIsochrones(isochroneData);
 
-        // Compute intersection
+        // Compute intersection (buffered by the session's search buffer)
         if (isochroneData.length > 0) {
           const { intersection: newIntersection, area } =
-            await computeIntersectionOnServer(isochroneData);
+            await computeIntersectionOnServer(isochroneData, buffer);
           setIntersection(newIntersection);
           setIntersectionArea(area);
         }
@@ -479,6 +503,61 @@ export default function SessionPage() {
     }
   }, [intersection, applyListings]);
 
+  // The search-buffer slider fires on every tick while dragging. Commit only
+  // after the drag settles: the label updates instantly, but persisting +
+  // recomputing + refetching properties on each tick makes the map rebuild and
+  // flicker. 250ms after the last tick is one commit per drag, not ~15.
+  const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
+    };
+  }, []);
+
+  const commitBuffer = useCallback(async (clamped: number) => {
+    try {
+      await fetch(`/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bufferPct: clamped }),
+      });
+    } catch {
+      // Non-fatal: the buffer still applies for this visit even if the save fails
+    }
+
+    const current = isochronesRef.current;
+    if (current.length === 0) return;
+    const { intersection: buffered, area } =
+      await computeIntersectionOnServer(current, clamped);
+    setIntersection(buffered);
+    setIntersectionArea(area);
+
+    if (!buffered) return;
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ polygon: buffered, cacheOnly: true }),
+      });
+      const data = await readScrapeResponse(res);
+      if (res.ok && (data.listings?.length ?? 0) > 0) {
+        applyListings(data.listings!);
+        setScrapeCompleted(true);
+      }
+    } catch {
+      // Cache miss is fine — the Find properties button still works
+    }
+  }, [sessionId, computeIntersectionOnServer, applyListings]);
+
+  const handleBufferChange = useCallback((pct: number) => {
+    const clamped = Math.max(0, Math.min(15, Math.round(pct)));
+    setBufferPct(clamped);
+    if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
+    bufferTimerRef.current = setTimeout(() => {
+      void commitBuffer(clamped);
+    }, 250);
+  }, [commitBuffer]);
+
   // The daily cron keeps the DB warm, so stored listings can appear the
   // moment the zone is known — no button press, no scraping on page load.
   const autoLoadedRef = useRef(false);
@@ -552,6 +631,8 @@ export default function SessionPage() {
             isScraping={isScraping}
             scrapeCompleted={scrapeCompleted}
             scrapeError={scrapeError}
+            bufferPct={bufferPct}
+            onBufferChange={handleBufferChange}
             onFindProperties={handleFindProperties}
           />
 
