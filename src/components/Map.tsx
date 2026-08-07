@@ -108,6 +108,9 @@ export default function Map({
   const map = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [panelExpanded, setPanelExpanded] = useState(true);
+  // 3D buildings + fog cost real GPU work, so they're opt-in via the Layers
+  // panel rather than always-on.
+  const [show3D, setShow3D] = useState(false);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const markerContainersRef = useRef<HTMLDivElement[]>([]);
   // Keyed by source:external_id so we can update visibility without recreating
@@ -193,6 +196,12 @@ export default function Map({
   }), [users, isochrones]);
 
   const [visibility, setVisibility] = useState<LayerVisibility>(getInitialVisibility);
+
+  // Always-current visibility for the layer-creation effect, which must read
+  // it without taking a dependency — adding `visibility` to that effect's deps
+  // would tear down and rebuild every isochrone layer on each checkbox toggle.
+  const visibilityRef = useRef(visibility);
+  visibilityRef.current = visibility;
 
   // Always-current filter state so the marker-creation effect can apply the
   // right opacity on new pins without listing filters in its deps (which
@@ -294,10 +303,28 @@ export default function Map({
       console.warn('Style image missing:', e.id);
     });
 
-    map.current.on('load', async () => {
-      try {
-        if (map.current?.getSource('composite')) {
-          map.current?.addLayer({
+    map.current.on('load', () => {
+      setMapLoaded(true);
+    });
+
+    map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+    return () => {
+      map.current?.remove();
+      map.current = null;
+    };
+  }, [mapboxToken]);
+
+  // Add/remove the 3D buildings extrusion + fog when the toggle changes.
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const hasLayer = map.current.getLayer('3d-buildings');
+
+    if (show3D) {
+      if (!hasLayer && map.current.getSource('composite')) {
+        try {
+          map.current.addLayer({
             'id': '3d-buildings',
             'source': 'composite',
             'source-layer': 'building',
@@ -311,13 +338,12 @@ export default function Map({
               'fill-extrusion-opacity': 0.7
             }
           });
+        } catch (err) {
+          console.warn('3D buildings failed to load:', err);
         }
-      } catch (err) {
-        console.warn('3D buildings failed to load:', err);
       }
-
       try {
-        map.current?.setFog({
+        map.current.setFog({
           'range': [-1, 2],
           'horizon-blend': 0.3,
           'color': 'white',
@@ -328,17 +354,15 @@ export default function Map({
       } catch (err) {
         console.warn('Fog failed to load:', err);
       }
-
-      setMapLoaded(true);
-    });
-
-    map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
-
-    return () => {
-      map.current?.remove();
-      map.current = null;
-    };
-  }, [mapboxToken]);
+    } else {
+      if (hasLayer) map.current.removeLayer('3d-buildings');
+      try {
+        map.current.setFog(null);
+      } catch (err) {
+        console.warn('Fog removal failed:', err);
+      }
+    }
+  }, [show3D, mapLoaded]);
 
   // Render user markers
   useEffect(() => {
@@ -710,8 +734,13 @@ export default function Map({
       const sourceId = `isochrone-${index}`;
 
       map.current?.addSource(sourceId, { type: 'geojson', data: isochrone });
-      map.current?.addLayer({ id: `${sourceId}-fill`, type: 'fill', source: sourceId, paint: { 'fill-color': color, 'fill-opacity': 0 } });
-      map.current?.addLayer({ id: `${sourceId}-outline`, type: 'line', source: sourceId, paint: { 'line-color': color, 'line-width': 2 } });
+      // Apply the panel's current per-zone visibility at creation: layers are
+      // created in a different commit than the toggle state flips, so a layer
+      // left at Mapbox's default 'visible' would show a zone its checkbox
+      // says is hidden until the user toggles it.
+      const zoneVisible = visibilityRef.current.isochrones[index] ? 'visible' : 'none';
+      map.current?.addLayer({ id: `${sourceId}-fill`, type: 'fill', source: sourceId, layout: { visibility: zoneVisible }, paint: { 'fill-color': color, 'fill-opacity': 0 } });
+      map.current?.addLayer({ id: `${sourceId}-outline`, type: 'line', source: sourceId, layout: { visibility: zoneVisible }, paint: { 'line-color': color, 'line-width': 2 } });
     });
 
     // Tag every feature with its zone index so we can selectively hide
@@ -722,17 +751,29 @@ export default function Map({
     }));
 
     if (allIsochroneFeatures.length > 0) {
+      // Same creation-time visibility as the per-zone layers above: the
+      // combined layer must respect the panel state even if no toggle has been
+      // flipped since the layers were created.
+      const visibleIdxs = visibilityRef.current.isochrones
+        .map((v, i) => (v ? i : -1))
+        .filter(i => i !== -1);
+      const anyVisible = visibleIdxs.length > 0;
+      const combinedFilter = ['in', ['get', 'idx'], ['literal', visibleIdxs]] as mapboxgl.FilterSpecification;
+
       map.current?.addSource('isochrones-combined', { type: 'geojson', data: { type: 'FeatureCollection', features: allIsochroneFeatures } });
-      map.current?.addLayer({ id: 'isochrones-fade', type: 'fill', source: 'isochrones-combined', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.4, 'fill-opacity-transition': { duration: 300 } } });
-      map.current?.addLayer({ id: 'isochrones-outline-dash', type: 'line', source: 'isochrones-combined', paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [2, 1] } });
+      map.current?.addLayer({ id: 'isochrones-fade', type: 'fill', source: 'isochrones-combined', layout: { visibility: anyVisible ? 'visible' : 'none' }, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.4, 'fill-opacity-transition': { duration: 300 } } });
+      map.current?.addLayer({ id: 'isochrones-outline-dash', type: 'line', source: 'isochrones-combined', layout: { visibility: anyVisible ? 'visible' : 'none' }, paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [2, 1] } });
+      map.current?.setFilter('isochrones-fade', combinedFilter);
+      map.current?.setFilter('isochrones-outline-dash', combinedFilter);
     }
 
     if (intersection) {
+      const intersectionVisible = visibilityRef.current.intersection ? 'visible' : 'none';
       map.current.addSource('intersection', { type: 'geojson', data: intersection });
-      map.current.addLayer({ id: 'intersection-fill', type: 'fill', source: 'intersection', paint: { 'fill-color': '#22c55e', 'fill-opacity': 0 } });
-      map.current.addLayer({ id: 'intersection-fade', type: 'fill', source: 'intersection', paint: { 'fill-color': '#22c55e', 'fill-opacity': 0.5, 'fill-opacity-transition': { duration: 300 } } });
-      map.current.addLayer({ id: 'intersection-outline', type: 'line', source: 'intersection', paint: { 'line-color': '#16a34a', 'line-width': 3 } });
-      map.current.addLayer({ id: 'intersection-outline-dash', type: 'line', source: 'intersection', paint: { 'line-color': '#16a34a', 'line-width': 2, 'line-dasharray': [2, 1], 'line-opacity': 0.6 } });
+      map.current.addLayer({ id: 'intersection-fill', type: 'fill', source: 'intersection', layout: { visibility: intersectionVisible }, paint: { 'fill-color': '#22c55e', 'fill-opacity': 0 } });
+      map.current.addLayer({ id: 'intersection-fade', type: 'fill', source: 'intersection', layout: { visibility: intersectionVisible }, paint: { 'fill-color': '#22c55e', 'fill-opacity': 0.5, 'fill-opacity-transition': { duration: 300 } } });
+      map.current.addLayer({ id: 'intersection-outline', type: 'line', source: 'intersection', layout: { visibility: intersectionVisible }, paint: { 'line-color': '#16a34a', 'line-width': 3 } });
+      map.current.addLayer({ id: 'intersection-outline-dash', type: 'line', source: 'intersection', layout: { visibility: intersectionVisible }, paint: { 'line-color': '#16a34a', 'line-width': 2, 'line-dasharray': [2, 1], 'line-opacity': 0.6 } });
 
       const bounds = new mapboxgl.LngLatBounds();
       const coords = intersection.geometry.coordinates;
@@ -776,6 +817,16 @@ export default function Map({
           <div className="rounded-lg border border-border bg-background/95 backdrop-blur shadow-md p-3">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold tracking-tight">Layers</h2>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                Display
+              </div>
+              <label className="flex items-center gap-2 py-1 cursor-pointer text-sm">
+                <Checkbox checked={show3D} onCheckedChange={(v) => setShow3D(v === true)} />
+                <span>3D buildings</span>
+              </label>
             </div>
 
             {users.length > 0 && (

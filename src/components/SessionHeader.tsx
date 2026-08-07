@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ShareLink from '@/components/ShareLink';
+import { Logo } from '@/components/Logo';
 
 interface SessionHeaderProps {
   sessionId: string;
@@ -39,7 +40,7 @@ export default function SessionHeader({ sessionId }: SessionHeaderProps) {
     <header className="border-b border-border bg-background/80 backdrop-blur">
       <div className="px-4 sm:px-6 py-3 flex items-center gap-4">
         <Link href="/" className="flex items-center gap-2 group">
-          <div className="h-5 w-5 rounded-md bg-foreground transition-transform group-hover:scale-110" />
+          <Logo className="h-5 w-5 transition-transform group-hover:scale-110" />
           <span className="text-sm font-medium tracking-tight">CommonGround</span>
           <span className="text-xs text-muted-foreground ml-2 hidden sm:inline">
             {name ?? sessionId.slice(0, 8)}

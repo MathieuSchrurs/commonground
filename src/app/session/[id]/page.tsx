@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
+import { Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { createClient } from '@/utils/supabase/client';
@@ -9,13 +11,26 @@ import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import UserInputForm from '@/components/UserInputForm';
 import UserList from '@/components/UserList';
-import Map from '@/components/Map';
 import ZoneLegend from '@/components/ZoneLegend';
 import SessionHeader from '@/components/SessionHeader';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import { Button } from '@/components/ui/button';
-import { computeIntersection, calculateArea } from '@/lib/geo';
 import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
+
+// The map pulls in mapbox-gl (~480KB gzipped). Code-split it so the page's
+// shell (header, sidebar) paints immediately and mapbox parses after first
+// paint instead of blocking it.
+const Map = dynamic(() => import('@/components/Map'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full w-full items-center justify-center bg-muted/20">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading map…
+      </div>
+    </div>
+  ),
+});
 
 type ScrapeResponse = { listings?: PropertyListing[]; count?: number; error?: string };
 
@@ -158,6 +173,39 @@ export default function SessionPage() {
     return isochroneData.features[0] as Feature<Polygon | MultiPolygon>;
   }, []);
 
+  // Intersection is computed on the server (turf stays off the client bundle
+  // and off the main thread). Fire-and-forget: a failure just leaves the last
+  // known intersection in place.
+  const computeIntersectionOnServer = useCallback(
+    async (isochrones: Feature<Polygon | MultiPolygon>[]): Promise<{
+      intersection: Feature<Polygon | MultiPolygon> | null;
+      area: number | null;
+    }> => {
+      try {
+        const res = await fetch('/api/intersection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isochrones }),
+        });
+        if (!res.ok) return { intersection: null, area: null };
+        const data = await res.json();
+        return { intersection: data.intersection ?? null, area: data.areaKm2 ?? null };
+      } catch {
+        return { intersection: null, area: null };
+      }
+    },
+    []
+  );
+
+  const computeAndSetIntersection = useCallback(
+    async (updatedIsochrones: Feature<Polygon | MultiPolygon>[]) => {
+      const { intersection, area } = await computeIntersectionOnServer(updatedIsochrones);
+      setIntersection(intersection);
+      setIntersectionArea(area);
+    },
+    [computeIntersectionOnServer]
+  );
+
   // Load initial data
   useEffect(() => {
     const loadSession = async () => {
@@ -186,13 +234,10 @@ export default function SessionPage() {
 
         // Compute intersection
         if (isochroneData.length > 0) {
-          const newIntersection = computeIntersection(isochroneData);
+          const { intersection: newIntersection, area } =
+            await computeIntersectionOnServer(isochroneData);
           setIntersection(newIntersection);
-          
-          if (newIntersection) {
-            const area = calculateArea(newIntersection);
-            setIntersectionArea(area);
-          }
+          setIntersectionArea(area);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred');
@@ -202,24 +247,7 @@ export default function SessionPage() {
     };
 
     loadSession();
-  }, [sessionId, fetchIsochrone]);
-
-  const computeAndSetIntersection = useCallback((updatedIsochrones: Feature<Polygon | MultiPolygon>[]) => {
-    if (updatedIsochrones.length > 0) {
-      const newIntersection = computeIntersection(updatedIsochrones);
-      setIntersection(newIntersection);
-
-      if (newIntersection) {
-        const area = calculateArea(newIntersection);
-        setIntersectionArea(area);
-      } else {
-        setIntersectionArea(null);
-      }
-    } else {
-      setIntersection(null);
-      setIntersectionArea(null);
-    }
-  }, []);
+  }, [sessionId, fetchIsochrone, computeIntersectionOnServer]);
 
   // Set up real-time subscription
   useEffect(() => {
@@ -244,7 +272,7 @@ export default function SessionPage() {
             const updatedIsochrones = isochronesRef.current.filter((_, i) => i !== idx);
             setUsers(updatedUsers);
             setIsochrones(updatedIsochrones);
-            computeAndSetIntersection(updatedIsochrones);
+            await computeAndSetIntersection(updatedIsochrones);
             return;
           }
 
@@ -269,7 +297,7 @@ export default function SessionPage() {
             const updatedIsochrones = [...isochronesRef.current, isochrone];
             setUsers(updatedUsers);
             setIsochrones(updatedIsochrones);
-            computeAndSetIntersection(updatedIsochrones);
+            await computeAndSetIntersection(updatedIsochrones);
           } else {
             const idx = usersRef.current.findIndex(u => u.id === constraint.id);
             if (idx === -1) return;
@@ -279,7 +307,7 @@ export default function SessionPage() {
             updatedIsochrones[idx] = isochrone;
             setUsers(updatedUsers);
             setIsochrones(updatedIsochrones);
-            computeAndSetIntersection(updatedIsochrones);
+            await computeAndSetIntersection(updatedIsochrones);
           }
         }
       )
@@ -329,7 +357,7 @@ export default function SessionPage() {
           const updatedIsochrones = [...isochronesRef.current, isochrone];
           setUsers(updatedUsers);
           setIsochrones(updatedIsochrones);
-          computeAndSetIntersection(updatedIsochrones);
+          await computeAndSetIntersection(updatedIsochrones);
         }
       }
     } catch (err) {
@@ -376,7 +404,7 @@ export default function SessionPage() {
 
       setUsers(updatedUsers);
       setIsochrones(updatedIsochrones);
-      computeAndSetIntersection(updatedIsochrones);
+      await computeAndSetIntersection(updatedIsochrones);
       setEditingUser(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -406,7 +434,7 @@ export default function SessionPage() {
         setEditingUser(null);
       }
 
-      computeAndSetIntersection(updatedIsochrones);
+      await computeAndSetIntersection(updatedIsochrones);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     }

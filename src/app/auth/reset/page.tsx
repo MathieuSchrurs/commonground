@@ -6,6 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Logo } from '@/components/Logo';
 
 // Landing page for a password-reset link. The recovery code is exchanged for a
 // session by /auth/callback before redirecting here, so updateUser can set the
@@ -45,7 +46,7 @@ export default function ResetPage() {
     <div className="min-h-screen bg-background flex items-center justify-center px-6 py-16">
       <div className="w-full max-w-sm">
         <div className="flex items-center gap-2 mb-8">
-          <div className="h-6 w-6 rounded-md bg-foreground" />
+          <Logo className="h-6 w-6" />
           <span className="text-sm font-medium tracking-tight">CommonGround</span>
         </div>
         <h1 className="text-2xl font-semibold tracking-tight mb-2">Set a new password</h1>

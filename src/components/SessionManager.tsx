@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Logo } from '@/components/Logo';
 
 interface SessionManagerProps {
   onCreateSession: () => Promise<void>;
@@ -47,7 +48,7 @@ export default function SessionManager({ onCreateSession, onJoinSession, isLoadi
       <div className="w-full max-w-md">
         <div className="mb-12">
           <div className="flex items-center gap-2 mb-8">
-            <div className="h-6 w-6 rounded-md bg-foreground" />
+            <Logo className="h-6 w-6" />
             <span className="text-sm font-medium tracking-tight">CommonGround</span>
           </div>
           <h1 className="text-3xl font-semibold tracking-tight mb-3">
