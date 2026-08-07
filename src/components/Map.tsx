@@ -516,7 +516,7 @@ export default function Map({
         </div>
       `;
 
-      // Love/veto controls, re-rendered whenever reactions or identity change
+      // Love/object controls, re-rendered whenever reactions or identity change
       const reactionsEl = document.createElement('div');
       popupEl.appendChild(reactionsEl);
       const renderReactions = () => {
@@ -528,7 +528,7 @@ export default function Map({
         const mine = me ? rs.find(r => r.user_id === me)?.reaction : undefined;
         const nameOf = new globalThis.Map(usersForNamesRef.current.map(u => [u.id, u.name]));
         const loveNames = rs.filter(r => r.reaction === 'love').map(r => nameOf.get(r.user_id) ?? '?');
-        const vetoNames = rs.filter(r => r.reaction === 'veto').map(r => nameOf.get(r.user_id) ?? '?');
+        const objectNames = rs.filter(r => r.reaction === 'object').map(r => nameOf.get(r.user_id) ?? '?');
 
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;';
@@ -546,15 +546,15 @@ export default function Map({
           return btn;
         };
         row.appendChild(makeButton('love', `❤️ Love${loveNames.length ? ` · ${loveNames.length}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
-        row.appendChild(makeButton('veto', `✕ Veto${vetoNames.length ? ` · ${vetoNames.length}` : ''}`, mine === 'veto', '#e4e4e7', '#52525b'));
+        row.appendChild(makeButton('object', `✕ Object${objectNames.length ? ` · ${objectNames.length}` : ''}`, mine === 'object', '#e4e4e7', '#52525b'));
         reactionsEl.appendChild(row);
 
         const note = document.createElement('div');
         note.style.cssText = 'font-size:10px;color:#888;margin-bottom:8px;';
-        if (loveNames.length || vetoNames.length) {
+        if (loveNames.length || objectNames.length) {
           note.textContent = [
             loveNames.length ? `❤️ ${loveNames.join(', ')}` : '',
-            vetoNames.length ? `✕ ${vetoNames.join(', ')}` : '',
+            objectNames.length ? `✕ ${objectNames.join(', ')}` : '',
           ].filter(Boolean).join('  ·  ');
         } else if (!me) {
           note.textContent = 'Pick your name in the sidebar to vote';
@@ -613,7 +613,7 @@ export default function Map({
   }, [reactions, myUserId, users, mapLoaded]);
 
   // Pin styling from group opinion + freshness:
-  //  - vetoed by anyone  → desaturated
+  //  - objected to by anyone → desaturated
   //  - loved by someone  → amber ring
   //  - loved by everyone → amber ring + glow
   //  - new since last visit → blue halo
@@ -624,14 +624,14 @@ export default function Map({
       if (!dot) continue;
 
       const rs = listing.id ? reactions.filter(r => r.listing_id === listing.id) : [];
-      const vetoed = rs.some(r => r.reaction === 'veto');
+      const objected = rs.some(r => r.reaction === 'object');
       const loves = new Set(rs.filter(r => r.reaction === 'love').map(r => r.user_id));
       const lovedByAll = users.length > 1 && users.every(u => loves.has(u.id));
       const isNew = newListingKeys?.has(key) ?? false;
 
       const approx = listing.location_precision === 'approximate';
       const baseBorderColor = approx ? (SOURCE_COLORS[listing.source] ?? '#6b7280') : 'white';
-      dot.style.filter = vetoed ? 'grayscale(0.85)' : '';
+      dot.style.filter = objected ? 'grayscale(0.85)' : '';
       dot.style.border = loves.size > 0
         ? `2px ${approx ? 'dashed' : 'solid'} #f59e0b`
         : `2px ${approx ? 'dashed' : 'solid'} ${baseBorderColor}`;

@@ -14,7 +14,7 @@ function formatPrice(price?: number): string {
   return `€${price.toLocaleString('nl-BE')}`;
 }
 
-// Houses the group disagrees on: someone loves it, someone vetoes it. This is
+// Houses the group disagrees on: someone loves it, someone objects. This is
 // the signal that drives the conversation, so it gets its own card on the
 // dashboard rather than a line inside group favorites.
 export default function SplitVotesCard({ splits }: SplitVotesCardProps) {
@@ -33,7 +33,7 @@ export default function SplitVotesCard({ splits }: SplitVotesCardProps) {
             No disagreements yet — everyone who&apos;s reacted is on the same page.
           </p>
         ) : (
-          splits.map(({ listing, loveNames, vetoNames }) => (
+          splits.map(({ listing, loveNames, objectNames }) => (
             <a
               key={listing.id}
               href={listing.url}
@@ -57,7 +57,7 @@ export default function SplitVotesCard({ splits }: SplitVotesCardProps) {
                 </span>
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <X className="h-3 w-3" />
-                  {vetoNames.join(', ')}
+                  {objectNames.join(', ')}
                 </span>
               </div>
             </a>

@@ -14,10 +14,10 @@ describe('route', () => {
 
   it('maps Invalid to 400', async () => {
     const res = await route(async () => {
-      throw new Invalid('reaction must be love or veto');
+      throw new Invalid('reaction must be love or object');
     })(req, ctx);
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'reaction must be love or veto' });
+    expect(await res.json()).toEqual({ error: 'reaction must be love or object' });
   });
 
   it('maps NotFound to 404', async () => {

@@ -15,7 +15,7 @@ function listing(id: string): PropertyListing {
 function reaction(
   listing_id: string,
   user_id: string,
-  reaction: 'love' | 'veto',
+  reaction: 'love' | 'object',
 ): ListingReaction {
   return { id: `${listing_id}-${user_id}`, session_id: 's', listing_id, user_id, reaction };
 }
@@ -30,7 +30,7 @@ describe('computeFavorites', () => {
   it('keeps only listings loved by at least one person', () => {
     const result = computeFavorites(
       [listing('a'), listing('b')],
-      [reaction('a', 'u1', 'love'), reaction('b', 'u1', 'veto')],
+      [reaction('a', 'u1', 'love'), reaction('b', 'u1', 'object')],
       users,
     );
     expect(result.map((f) => f.listing.id)).toEqual(['a']);
@@ -73,24 +73,24 @@ describe('computeFavorites', () => {
     expect(result[0].unanimous).toBe(false);
   });
 
-  it('reports veto names alongside loves', () => {
+  it('reports objection names alongside loves', () => {
     const result = computeFavorites(
       [listing('a')],
-      [reaction('a', 'u1', 'love'), reaction('a', 'u2', 'veto')],
+      [reaction('a', 'u1', 'love'), reaction('a', 'u2', 'object')],
       users,
     );
     expect(result[0].loveNames).toEqual(['Anna']);
-    expect(result[0].vetoNames).toEqual(['Tom']);
+    expect(result[0].objectNames).toEqual(['Tom']);
   });
 });
 
 describe('computeSplitVotes', () => {
-  it('returns only houses loved by some and vetoed by others', () => {
+  it('returns only houses loved by some and objected to by others', () => {
     const favorites = computeFavorites(
       [listing('a'), listing('b')],
       [
         reaction('a', 'u1', 'love'),
-        reaction('a', 'u2', 'veto'),
+        reaction('a', 'u2', 'object'),
         reaction('b', 'u1', 'love'),
         reaction('b', 'u2', 'love'),
       ],
@@ -107,7 +107,7 @@ describe('computeSplitVotes', () => {
         reaction('a', 'u1', 'love'),
         reaction('a', 'u2', 'love'),
         reaction('b', 'u1', 'love'),
-        reaction('b', 'u2', 'veto'),
+        reaction('b', 'u2', 'object'),
       ],
       users,
     );

@@ -11,7 +11,7 @@ import { Invalid, NotFound } from './errors';
 import { resolveToggle } from './reactions';
 import { SessionUserRow, toCommuteConstraint } from './mappers';
 
-const REACTION_KINDS: ReactionKind[] = ['love', 'veto'];
+const REACTION_KINDS: ReactionKind[] = ['love', 'object'];
 
 // A sessions row — now with a human name, an owner account, and the search
 // buffer percentage applied to the common ground when searching properties.
@@ -338,7 +338,7 @@ export async function toggleReaction(
   reaction: ReactionKind,
 ): Promise<ListingReaction | null> {
   if (!listingId || !userId) throw new Invalid('listingId and userId are required');
-  if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or veto');
+  if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or object');
 
   const db = await createClient();
   const { data: existing, error: fetchError } = await db

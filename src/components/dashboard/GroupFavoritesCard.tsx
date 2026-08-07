@@ -37,7 +37,7 @@ export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProp
             shared picks show up here.
           </p>
         ) : (
-          shared.map(({ listing, loveCount, loveNames, vetoNames, unanimous }) => (
+          shared.map(({ listing, loveCount, loveNames, objectNames, unanimous }) => (
             <a
               key={listing.id}
               href={listing.url}
@@ -70,10 +70,10 @@ export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProp
                   <Heart className="h-3 w-3 fill-current" />
                   {loveNames.join(', ')}
                 </span>
-                {vetoNames.length > 0 && (
+                {objectNames.length > 0 && (
                   <span className="flex items-center gap-1 text-muted-foreground">
                     <X className="h-3 w-3" />
-                    {vetoNames.join(', ')}
+                    {objectNames.join(', ')}
                   </span>
                 )}
               </div>

@@ -7,7 +7,7 @@ export interface Favorite {
   listing: PropertyListing;
   loveCount: number;
   loveNames: string[];
-  vetoNames: string[];
+  objectNames: string[];
   unanimous: boolean; // everyone in the session loves it
 }
 
@@ -33,21 +33,21 @@ export function computeFavorites(
     .map((p) => {
       const rs = byListing.get(p.id!) ?? [];
       const loves = rs.filter((r) => r.reaction === 'love');
-      const vetoes = rs.filter((r) => r.reaction === 'veto');
+      const objections = rs.filter((r) => r.reaction === 'object');
       return {
         listing: p,
         loveCount: loves.length,
         loveNames: loves.map((r) => nameOf.get(r.user_id) ?? '?'),
-        vetoNames: vetoes.map((r) => nameOf.get(r.user_id) ?? '?'),
+        objectNames: objections.map((r) => nameOf.get(r.user_id) ?? '?'),
         unanimous: users.length > 1 && loves.length === users.length,
       };
     })
     .sort((a, b) => b.loveCount - a.loveCount);
 }
 
-// The houses the group is split on — loved by someone and vetoed by someone
-// else. The dashboard's conflict card is built from this; when a house shows
-// up here it is the debate worth having next.
+// The houses the group is split on — loved by someone and objected to by
+// someone else. The dashboard's conflict card is built from this; when a house
+// shows up here it is the debate worth having next.
 export function computeSplitVotes(favorites: Favorite[]): Favorite[] {
-  return favorites.filter((f) => f.vetoNames.length > 0);
+  return favorites.filter((f) => f.objectNames.length > 0);
 }

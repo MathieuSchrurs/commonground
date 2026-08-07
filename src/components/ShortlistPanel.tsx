@@ -39,7 +39,7 @@ export default function ShortlistPanel({ properties, reactions, users }: Shortli
         </span>
       </CardHeader>
       <CardContent className="space-y-2">
-        {shortlist.map(({ listing, loveNames, vetoNames, unanimous }) => (
+        {shortlist.map(({ listing, loveNames, objectNames, unanimous }) => (
           <a
             key={listing.id}
             href={listing.url}
@@ -72,10 +72,10 @@ export default function ShortlistPanel({ properties, reactions, users }: Shortli
                 <Heart className="h-3 w-3 fill-current" />
                 {loveNames.join(', ')}
               </span>
-              {vetoNames.length > 0 && (
+              {objectNames.length > 0 && (
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <X className="h-3 w-3" />
-                  {vetoNames.join(', ')}
+                  {objectNames.join(', ')}
                 </span>
               )}
             </div>
