@@ -435,6 +435,28 @@ export async function recordDecision(
   return decision;
 }
 
+// Close the meeting: write what was agreed and what still needs doing, then
+// clear the agenda — in one operation, so a failure can never leave the group
+// with a wiped agenda and no record of why.
+export async function closeMeeting(
+  sessionId: string,
+  decisions: string[],
+  todos: string[],
+  by: string | null,
+): Promise<void> {
+  const clean = (xs: unknown) =>
+    Array.isArray(xs) ? xs.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
+
+  const db = await createClient();
+  const { error } = await db.rpc('close_meeting', {
+    p_session_id: sessionId,
+    p_decisions: clean(decisions),
+    p_todos: clean(todos),
+    p_by: by ?? null,
+  } as never);
+  if (error) throw error;
+}
+
 // Every reaction in a session.
 export async function listReactions(sessionId: string): Promise<ListingReaction[]> {
   const db = await createClient();

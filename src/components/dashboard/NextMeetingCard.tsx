@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { CalendarClock, ListChecks, MapPin, Pencil, Trash2 } from 'lucide-react';
+import { CalendarClock, CheckCheck, ListChecks, MapPin, Pencil, Trash2 } from 'lucide-react';
 import { Meeting } from '@/types/meeting';
 import { MeetingItem } from '@/types/todos';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
+import CloseMeetingDialog from './CloseMeetingDialog';
 
 interface NextMeetingCardProps {
   meeting: Meeting | null;
@@ -20,6 +21,7 @@ interface NextMeetingCardProps {
   onAddItem: (text: string) => Promise<void>;
   onToggleItem: (id: string, done: boolean) => Promise<void>;
   onDeleteItem: (id: string) => Promise<void>;
+  onCloseMeeting: (decisions: string[], todos: string[]) => Promise<void>;
 }
 
 // An ISO timestamp -> the "YYYY-MM-DDTHH:mm" a datetime-local input expects,
@@ -50,6 +52,7 @@ export default function NextMeetingCard({
   onAddItem,
   onToggleItem,
   onDeleteItem,
+  onCloseMeeting,
 }: NextMeetingCardProps) {
   const [editing, setEditing] = useState(false);
   const [meetsAt, setMeetsAt] = useState('');
@@ -57,6 +60,8 @@ export default function NextMeetingCard({
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [newItem, setNewItem] = useState('');
+  const [closing, setClosing] = useState(false);
+  const [closingBusy, setClosingBusy] = useState(false);
 
   const nameOf = new Map(users.map((u) => [u.id, u.name]));
   const doneCount = items.filter((i) => i.done).length;
@@ -165,12 +170,44 @@ export default function NextMeetingCard({
               <ListChecks className="h-3.5 w-3.5" />
               Agenda
             </span>
-            {items.length > 0 && (
-              <span className="text-xs font-mono tabular-nums text-muted-foreground">
-                {doneCount}/{items.length}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {items.length > 0 && (
+                <span className="text-xs font-mono tabular-nums text-muted-foreground">
+                  {doneCount}/{items.length}
+                </span>
+              )}
+              {canEdit && !closing && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => setClosing(true)}
+                >
+                  <CheckCheck className="h-3 w-3 mr-1" />
+                  Close
+                </Button>
+              )}
+            </div>
           </div>
+
+          {closing && (
+            <div className="mb-2">
+              <CloseMeetingDialog
+                items={items}
+                busy={closingBusy}
+                onCancel={() => setClosing(false)}
+                onClose={async (decisions, todos) => {
+                  setClosingBusy(true);
+                  try {
+                    await onCloseMeeting(decisions, todos);
+                    setClosing(false);
+                  } finally {
+                    setClosingBusy(false);
+                  }
+                }}
+              />
+            </div>
+          )}
 
           {items.length === 0 ? (
             <p className="text-sm text-muted-foreground mb-2">

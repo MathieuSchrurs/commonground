@@ -185,6 +185,20 @@ export default function DashboardPage() {
     await fetch(`/api/sessions/${sessionId}/meeting-items/${id}`, { method: 'DELETE' });
   }, [sessionId]);
 
+  // Closing records the outcomes and clears the agenda in one server-side
+  // operation, so a failure can never wipe the agenda without keeping the
+  // decisions. Refresh what it touched.
+  const handleCloseMeeting = useCallback(async (decisions: string[], todos: string[]) => {
+    const res = await fetch(`/api/sessions/${sessionId}/meeting/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decisions, todos, by: myUserId }),
+    });
+    if (res.ok) {
+      await Promise.all([loadMeetingItems(), loadDecisions(), loadTodos()]);
+    }
+  }, [sessionId, myUserId, loadMeetingItems, loadDecisions, loadTodos]);
+
   // Any house anyone has reacted to, not just the converging ones — a survey
   // report matters most for the house the group is arguing about.
   const houseOptions = convergence.engaged.map((e) => ({
@@ -208,6 +222,7 @@ export default function DashboardPage() {
             onAddItem={handleAddMeetingItem}
             onToggleItem={handleToggleMeetingItem}
             onDeleteItem={handleDeleteMeetingItem}
+            onCloseMeeting={handleCloseMeeting}
           />
           <TodosCard
             sessionId={sessionId}
