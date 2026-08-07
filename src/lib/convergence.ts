@@ -176,3 +176,18 @@ export function computeConvergence({
 
   return { engaged, considered, favorites, contested };
 }
+
+// What the hunt is waiting on from one household: houses somebody wants that
+// this household has not weighed in on. Silence is what stalls a hunt — a
+// household with no position keeps a listing off the favorites card — so this
+// is the dashboard asking for the missing input rather than reporting news.
+//
+// Houses nobody wants are excluded: those were pruned, not left pending.
+export function listingsAwaiting(
+  { considered }: Convergence,
+  householdId: string,
+): ListingConvergence[] {
+  return considered.filter((e) =>
+    e.standings.some((s) => s.householdId === householdId && s.position === 'silent'),
+  );
+}

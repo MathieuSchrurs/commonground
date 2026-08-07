@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeConvergence, Convergence } from './convergence';
+import { computeConvergence, listingsAwaiting, Convergence } from './convergence';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 
@@ -336,5 +336,51 @@ describe('computeConvergence', () => {
     });
     expect(objectedTo.contested.map((e) => e.listing.id)).toEqual(['a']);
     expect(objectedTo.favorites).toEqual([]);
+  });
+});
+
+describe('listingsAwaiting', () => {
+  const base = { participants, households };
+
+  it('lists what a household has not weighed in on', () => {
+    const result = computeConvergence({
+      ...base,
+      listings: [listing('a'), listing('b')],
+      reactions: [
+        reaction('a', 'u1', 'love'), // h1 wants it, h3 silent
+        reaction('b', 'u1', 'love'),
+        reaction('b', 'u5', 'love'), // h3 has spoken on b
+      ],
+    });
+
+    expect(listingsAwaiting(result, 'h3').map((e) => e.listing.id)).toEqual(['a']);
+  });
+
+  it('drops a listing once anyone in the household reacts', () => {
+    const withSilence = computeConvergence({
+      ...base,
+      listings: [listing('a')],
+      reactions: [reaction('a', 'u1', 'love')],
+    });
+    expect(listingsAwaiting(withSilence, 'h3')).toHaveLength(1);
+
+    // Either partner speaking is enough — silence never blocks.
+    const afterPartner = computeConvergence({
+      ...base,
+      listings: [listing('a')],
+      reactions: [reaction('a', 'u1', 'love'), reaction('a', 'u6', 'object')],
+    });
+    expect(listingsAwaiting(afterPartner, 'h3')).toEqual([]);
+  });
+
+  it('does not ask about houses nobody wants', () => {
+    const result = computeConvergence({
+      ...base,
+      listings: [listing('a')],
+      reactions: [reaction('a', 'u1', 'object')],
+    });
+
+    // Pruned, not pending — nothing is waiting on anyone here.
+    expect(listingsAwaiting(result, 'h3')).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
 import SplitVotesCard from '@/components/dashboard/SplitVotesCard';
 import TodosCard from '@/components/dashboard/TodosCard';
 import SharedFilesCard from '@/components/dashboard/SharedFilesCard';
+import NeedsYouCard from '@/components/dashboard/NeedsYouCard';
 
 interface SessionUser {
   id: string;
@@ -42,12 +43,19 @@ export default function DashboardPage() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [myHouseholdId, setMyHouseholdId] = useState<string | null>(null);
 
   // "Who am I" is the participant linked to the signed-in account.
   useEffect(() => {
     fetch(`/api/sessions/${sessionId}/me`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setMyUserId(d?.participant?.id ?? null))
+      .then((d) => {
+        const me = d?.participant ?? null;
+        setMyUserId(me?.id ?? null);
+        // Unpaired, they are a household of one keyed by their own id — which
+        // is exactly the unit id convergence builds for them.
+        setMyHouseholdId(me ? me.householdId ?? me.id : null);
+      })
       .catch(() => {});
   }, [sessionId]);
 
@@ -211,6 +219,14 @@ export default function DashboardPage() {
       <SessionHeader sessionId={sessionId} />
 
       <main className="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 py-6 space-y-4">
+
+        <NeedsYouCard
+          convergence={convergence}
+          todos={todos}
+          items={items}
+          myUserId={myUserId}
+          myHouseholdId={myHouseholdId}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <NextMeetingCard
