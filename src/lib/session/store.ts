@@ -12,6 +12,7 @@ import { Decision } from '@/types/decisions';
 import { MeetingItem, Todo } from '@/types/todos';
 import { Meeting } from '@/types/meeting';
 import { Folder, SharedFile } from '@/types/files';
+import { canMoveFolder, descendantsOf, MAX_FOLDER_DEPTH } from '@/lib/folders';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
@@ -727,20 +728,71 @@ export async function listFolders(sessionId: string): Promise<Folder[]> {
   return (data ?? []) as unknown as Folder[];
 }
 
-export async function createFolder(sessionId: string, name: string): Promise<Folder> {
+export async function createFolder(
+  sessionId: string,
+  name: string,
+  parentId: string | null = null,
+): Promise<Folder> {
   if (!name?.trim()) throw new Invalid('A folder name is required');
+
+  // A new folder is a leaf, so it only has to fit under its parent. Checked
+  // here and not just in the hub, because the route is reachable directly.
+  if (parentId) {
+    const siblings = await listFolders(sessionId);
+    const parent = siblings.find((f) => f.id === parentId);
+    if (!parent) throw new NotFound('folder', parentId);
+    if (!canMoveFolder([...siblings, { id: 'new', session_id: sessionId, name, parent_id: null }], 'new', parentId)) {
+      throw new Invalid(`Folders can only go ${MAX_FOLDER_DEPTH} levels deep`);
+    }
+  }
+
   const db = await createClient();
   const { data, error } = await db
     .from('session_folders')
-    .insert([{ session_id: sessionId, name: name.trim() } as never])
+    .insert([{ session_id: sessionId, name: name.trim(), parent_id: parentId ?? null } as never])
     .select()
     .single();
   if (error) throw error;
   return data as unknown as Folder;
 }
 
-// Delete a folder. Its files fall back to the root via ON DELETE SET NULL, so
-// nothing is lost.
+// Move a folder into another (null = the root). Its children and files travel
+// with it, since they are attached by id rather than by path.
+export async function moveFolder(
+  sessionId: string,
+  folderId: string,
+  parentId: string | null,
+): Promise<Folder> {
+  const folders = await listFolders(sessionId);
+  if (!folders.some((f) => f.id === folderId)) throw new NotFound('folder', folderId);
+  if (parentId !== null && !folders.some((f) => f.id === parentId)) {
+    throw new NotFound('folder', parentId);
+  }
+
+  if (!canMoveFolder(folders, folderId, parentId)) {
+    throw new Invalid(
+      parentId !== null && descendantsOf(folders, folderId).includes(parentId)
+        ? 'A folder cannot be moved inside itself'
+        : `Folders can only go ${MAX_FOLDER_DEPTH} levels deep`,
+    );
+  }
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_folders')
+    .update({ parent_id: parentId } as never)
+    .eq('id', folderId)
+    .eq('session_id', sessionId)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new NotFound('folder', folderId);
+  return data as unknown as Folder;
+}
+
+// Delete a folder. Its files *and* its child folders fall back to the root via
+// ON DELETE SET NULL, so the whole subtree survives — deleting a folder never
+// destroys a document.
 export async function removeFolder(sessionId: string, folderId: string): Promise<void> {
   const db = await createClient();
   const { error } = await db

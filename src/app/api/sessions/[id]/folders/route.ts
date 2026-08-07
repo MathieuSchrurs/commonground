@@ -12,6 +12,6 @@ export const GET = route(async (_r: NextRequest, { params }: Ctx) => {
 
 export const POST = route(async (request: NextRequest, { params }: Ctx) => {
   const { id } = await params;
-  const { name } = await request.json();
-  return { folder: await createFolder(id, name) };
+  const { name, parentId } = await request.json();
+  return { folder: await createFolder(id, name, parentId ?? null) };
 });

@@ -1,9 +1,12 @@
 // A folder in a session's shared files hub. Files with folder_id === null
-// live at the root of the hub.
+// live at the root of the hub, and so do folders with parent_id === null.
 export interface Folder {
   id: string;
   session_id: string;
   name: string;
+  // The folder this one sits inside. Null means the root — a permanent state,
+  // not a migration artefact.
+  parent_id: string | null;
   created_at?: string;
 }
 
