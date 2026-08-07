@@ -43,8 +43,9 @@ export interface ConvergenceInput {
 }
 
 export interface Convergence {
-  // Every listing anyone has reacted to. The file picker, the map's shortlist
-  // and "needs you" read this; favorites and contested are disjoint subsets.
+  // Every listing anyone has reacted to — including ones nobody wants, which
+  // belong in neither card. The file picker reads this; the map's shortlist
+  // will once it migrates. Favorites and contested are disjoint subsets.
   engaged: ListingConvergence[];
   favorites: ListingConvergence[];
   contested: ListingConvergence[];
@@ -67,10 +68,14 @@ export function computeConvergence({
   // people did before households existed.
   const known = new Set(households.map((h) => h.id));
   const units: { household: Household; members: Participant[] }[] = [
-    ...households.map((household) => ({
-      household,
-      members: participants.filter((p) => p.householdId === household.id),
-    })),
+    // A household nobody belongs to is not a decider — left in, it could never
+    // be yes, so unanimity would be unreachable for the whole session.
+    ...households
+      .map((household) => ({
+        household,
+        members: participants.filter((p) => p.householdId === household.id),
+      }))
+      .filter((u) => u.members.length > 0),
     ...participants
       .filter((p) => !p.householdId || !known.has(p.householdId))
       .map((p) => ({ household: { id: p.id, name: p.name }, members: [p] })),
@@ -140,6 +145,12 @@ export function computeConvergence({
     };
 
     engaged.push(entry);
+
+    // Objecting is how the group prunes the map, and a prune is not a debate:
+    // a listing nobody wants belongs in neither card. A split household counts
+    // as wanting it, since one of its members loved it.
+    const wanted = standings.some((s) => s.position === 'yes' || s.position === 'split');
+    if (!wanted) continue;
 
     // A listing lands in at most one bucket, decided here and nowhere else —
     // the old code derived the contested list by filtering favorites, which is

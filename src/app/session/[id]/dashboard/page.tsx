@@ -63,7 +63,9 @@ export default function DashboardPage() {
 
   const loadConvergence = useCallback(async () => {
     const res = await fetch(`/api/sessions/${sessionId}/convergence`);
-    if (res.ok) setConvergence(await res.json());
+    // Spread over the defaults: engaged is dereferenced in the render body, so
+    // a response missing it would blank the whole dashboard, not just a card.
+    if (res.ok) setConvergence({ engaged: [], favorites: [], contested: [], ...(await res.json()) });
   }, [sessionId]);
 
   const loadFiles = useCallback(async () => {

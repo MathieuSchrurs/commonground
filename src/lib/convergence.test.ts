@@ -205,6 +205,51 @@ describe('computeConvergence', () => {
     expect(result.engaged[0].unanimous).toBe(false);
   });
 
+  it('does not treat a listing nobody wants as something to talk about', () => {
+    const result = computeConvergence({
+      listings: [listing('a')],
+      reactions: [reaction('a', 'u1', 'object')],
+      participants,
+      households,
+    });
+
+    // Objecting is how you prune the map. Pruning is not a debate.
+    expect(result.contested).toEqual([]);
+    expect(result.favorites).toEqual([]);
+    expect(result.engaged.map((e) => e.listing.id)).toEqual(['a']);
+  });
+
+  it('still contests a listing whose only household is split', () => {
+    const result = computeConvergence({
+      listings: [listing('a')],
+      reactions: [reaction('a', 'u1', 'love'), reaction('a', 'u2', 'object')],
+      participants,
+      households,
+    });
+
+    // No household is yes, but somebody wants it — that is a real argument.
+    expect(result.contested.map((e) => e.listing.id)).toEqual(['a']);
+    expect(result.contested[0].yesCount).toBe(0);
+  });
+
+  it('ignores a household nobody belongs to', () => {
+    const result = computeConvergence({
+      listings: [listing('a')],
+      reactions: [
+        reaction('a', 'u1', 'love'),
+        reaction('a', 'u3', 'love'),
+        reaction('a', 'u5', 'love'),
+      ],
+      participants,
+      // A household whose members have all left the session is not a decider:
+      // left in, it could never be yes, so unanimity would be unreachable.
+      households: [...households, { id: 'h4', name: 'Departed' }],
+    });
+
+    expect(result.favorites[0].standings).toHaveLength(3);
+    expect(result.favorites[0].unanimous).toBe(true);
+  });
+
   it('names who loves and who objects inside each household', () => {
     const result = computeConvergence({
       listings: [listing('a')],
