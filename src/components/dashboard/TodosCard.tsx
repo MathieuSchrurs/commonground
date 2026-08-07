@@ -3,6 +3,8 @@
 import React, { useState } from 'react';
 import { ListChecks, Trash2, UserRound } from 'lucide-react';
 import { Todo } from '@/types/todos';
+import { Decision } from '@/types/decisions';
+import DecisionsSection from './DecisionsSection';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -17,9 +19,19 @@ interface TodosCardProps {
   users: { id: string; name: string }[];
   myUserId: string | null;
   onChanged: () => void; // refetch todos after any change
+  decisions: Decision[];
+  onDecisionsChanged: () => void;
 }
 
-export default function TodosCard({ sessionId, todos, users, myUserId, onChanged }: TodosCardProps) {
+export default function TodosCard({
+  sessionId,
+  todos,
+  users,
+  myUserId,
+  onChanged,
+  decisions,
+  onDecisionsChanged,
+}: TodosCardProps) {
   const [title, setTitle] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
 
@@ -75,6 +87,23 @@ export default function TodosCard({ sessionId, todos, users, myUserId, onChanged
         </span>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Two concepts, one card: a decision is settled and can only be
+            superseded; a todo is work that gets done and disappears. */}
+        <DecisionsSection
+          sessionId={sessionId}
+          decisions={decisions}
+          users={users}
+          myUserId={myUserId}
+          onChanged={onDecisionsChanged}
+        />
+
+        <div className="flex items-center gap-2">
+          <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            To do
+          </span>
+        </div>
+
         <div className="flex gap-2">
           <Input
             placeholder="e.g. book a viewing Saturday"

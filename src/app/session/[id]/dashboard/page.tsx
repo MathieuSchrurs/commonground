@@ -6,6 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import { Meeting } from '@/types/meeting';
 import { SharedFile, Folder } from '@/types/files';
 import { MeetingItem, Todo } from '@/types/todos';
+import { Decision } from '@/types/decisions';
 import { Convergence } from '@/lib/convergence';
 import SessionHeader from '@/components/SessionHeader';
 import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
@@ -39,6 +40,7 @@ export default function DashboardPage() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [items, setItems] = useState<MeetingItem[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
 
   // "Who am I" is the participant linked to the signed-in account.
@@ -89,6 +91,11 @@ export default function DashboardPage() {
     if (res.ok) setTodos((await res.json()).todos ?? []);
   }, [sessionId]);
 
+  const loadDecisions = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/decisions`);
+    if (res.ok) setDecisions((await res.json()).decisions ?? []);
+  }, [sessionId]);
+
   // A single "something in the hub changed" reload for the files card.
   const reloadHub = useCallback(() => {
     loadFiles();
@@ -107,9 +114,10 @@ export default function DashboardPage() {
         loadFolders(),
         loadMeetingItems(),
         loadTodos(),
+        loadDecisions(),
       ]);
     })();
-  }, [loadUsers, loadMeeting, loadConvergence, loadFiles, loadFolders, loadMeetingItems, loadTodos]);
+  }, [loadUsers, loadMeeting, loadConvergence, loadFiles, loadFolders, loadMeetingItems, loadTodos, loadDecisions]);
 
   // Live updates: refetch the (small) affected set when others change it.
   useEffect(() => {
@@ -141,9 +149,12 @@ export default function DashboardPage() {
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'session_todos', filter: `session_id=eq.${sessionId}` },
         () => loadTodos())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'session_decisions', filter: `session_id=eq.${sessionId}` },
+        () => loadDecisions())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadUsers, loadMeetingItems, loadTodos, supabase]);
+  }, [sessionId, loadMeeting, loadFiles, loadFolders, loadConvergence, loadUsers, loadMeetingItems, loadTodos, loadDecisions, supabase]);
 
   const handleSaveMeeting = useCallback(async (meetsAt: string, location: string, note: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/meeting`, {
@@ -204,6 +215,8 @@ export default function DashboardPage() {
             users={users}
             myUserId={myUserId}
             onChanged={loadTodos}
+            decisions={decisions}
+            onDecisionsChanged={loadDecisions}
           />
         </div>
 

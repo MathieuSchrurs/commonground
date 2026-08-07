@@ -3,11 +3,12 @@
 // and typed-error invariants. API routes are thin shells over these functions.
 //
 // Grows one aggregate at a time. Currently: sessions, users, households,
-// reactions.
+// reactions, decisions.
 
 import { createClient } from '@/utils/supabase/server';
 import { CommuteConstraint } from '@/types/user';
 import { Household } from '@/types/household';
+import { Decision } from '@/types/decisions';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
 import { resolveToggle } from './reactions';
@@ -386,6 +387,52 @@ export async function dissolveHousehold(sessionId: string, householdId: string):
     .eq('id', householdId)
     .eq('session_id', sessionId);
   if (error) throw error;
+}
+
+// The group's decisions, oldest first — the order they were agreed in is the
+// order they read in.
+export async function listDecisions(sessionId: string): Promise<Decision[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_decisions')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Decision[];
+}
+
+// Record something the group has agreed. Optionally supersedes an earlier
+// decision, which stays on the record rather than being deleted — changing
+// your mind is history, not an edit.
+export async function recordDecision(
+  sessionId: string,
+  text: string,
+  decidedBy: string | null,
+  supersedesId?: string | null,
+): Promise<Decision> {
+  if (!text?.trim()) throw new Invalid('A decision needs some text');
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_decisions')
+    .insert([{ session_id: sessionId, text: text.trim(), decided_by: decidedBy ?? null } as never])
+    .select('*')
+    .single();
+  if (error) throw error;
+
+  const decision = data as unknown as Decision;
+
+  if (supersedesId) {
+    const { error: linkError } = await db
+      .from('session_decisions')
+      .update({ superseded_by: decision.id } as never)
+      .eq('id', supersedesId)
+      .eq('session_id', sessionId);
+    if (linkError) throw linkError;
+  }
+
+  return decision;
 }
 
 // Every reaction in a session.
