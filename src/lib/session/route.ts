@@ -20,7 +20,16 @@ export function route<Ctx>(handler: Handler<Ctx>) {
       if (error instanceof NotFound) {
         return NextResponse.json({ error: error.message }, { status: 404 });
       }
-      console.error('[route] unhandled error:', error);
+      // Supabase errors are plain objects whose fields are not enumerable the
+      // way console.error expects, so logging them directly prints "{}" and
+      // leaves a 500 with nothing to debug from. Pull the fields out by name.
+      const e = error as { message?: string; code?: string; details?: string; hint?: string };
+      console.error('[route] unhandled error:', {
+        message: e?.message ?? String(error),
+        code: e?.code,
+        details: e?.details,
+        hint: e?.hint,
+      });
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
   };
