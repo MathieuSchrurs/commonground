@@ -8,4 +8,6 @@ export interface CommuteConstraint {
   longitude: number;
   maxMinutes: number;
   transportMode: TransportMode;
+  // Which household this participant decides as. Null means a household of one.
+  householdId?: string | null;
 }

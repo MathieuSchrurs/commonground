@@ -24,6 +24,9 @@ interface MapProps {
   onToggleReaction?: (listingId: string, reaction: ReactionKind) => void;
   /** `source:external_id` keys of listings that appeared since the last visit */
   newListingKeys?: Set<string>;
+  /** ids of listings every household is yes on — computed from convergence, so
+   *  a couple's two hearts count once rather than twice */
+  unanimousListingIds?: Set<string>;
 }
 
 interface LayerVisibility {
@@ -103,6 +106,7 @@ export default function Map({
   myUserId = null,
   onToggleReaction,
   newListingKeys,
+  unanimousListingIds,
 }: MapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
@@ -615,7 +619,7 @@ export default function Map({
   // Pin styling from group opinion + freshness:
   //  - objected to by anyone → desaturated
   //  - loved by someone  → amber ring
-  //  - loved by everyone → amber ring + glow
+  //  - every household in → amber ring + glow
   //  - new since last visit → blue halo
   useEffect(() => {
     for (const key of Object.keys(propertyMarkersRef.current)) {
@@ -626,7 +630,9 @@ export default function Map({
       const rs = listing.id ? reactions.filter(r => r.listing_id === listing.id) : [];
       const objected = rs.some(r => r.reaction === 'object');
       const loves = new Set(rs.filter(r => r.reaction === 'love').map(r => r.user_id));
-      const lovedByAll = users.length > 1 && users.every(u => loves.has(u.id));
+      // Unanimity is a household question, not a headcount — the parent
+      // computes it from convergence so the map and the dashboard agree.
+      const lovedByAll = listing.id ? (unanimousListingIds?.has(listing.id) ?? false) : false;
       const isNew = newListingKeys?.has(key) ?? false;
 
       const approx = listing.location_precision === 'approximate';
@@ -641,7 +647,7 @@ export default function Map({
       if (isNew) shadows.push(`0 0 0 ${lovedByAll ? 8 : 4}px rgba(37,99,235,0.35)`);
       dot.style.boxShadow = shadows.join(', ');
     }
-  }, [reactions, users, newListingKeys, mapLoaded, properties]);
+  }, [reactions, users, newListingKeys, unanimousListingIds, mapLoaded, properties]);
 
   // Apply master toggle + filter visibility — runs after creation, and again
   // whenever any filter changes. Reads always-current state via the ref Map.

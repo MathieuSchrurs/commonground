@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
@@ -14,6 +14,9 @@ import UserList from '@/components/UserList';
 import ZoneLegend from '@/components/ZoneLegend';
 import SessionHeader from '@/components/SessionHeader';
 import ShortlistPanel from '@/components/ShortlistPanel';
+import HouseholdsCard from '@/components/HouseholdsCard';
+import { Household } from '@/types/household';
+import { computeConvergence } from '@/lib/convergence';
 import { Button } from '@/components/ui/button';
 import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
 
@@ -60,6 +63,7 @@ export default function SessionPage() {
   const [supabase] = useState(() => createClient());
 
   const [users, setUsers] = useState<CommuteConstraint[]>([]);
+  const [households, setHouseholds] = useState<Household[]>([]);
   const [isochrones, setIsochrones] = useState<Feature<Polygon | MultiPolygon>[]>([]);
   const [intersection, setIntersection] = useState<Feature<Polygon | MultiPolygon> | null>(null);
   const [intersectionArea, setIntersectionArea] = useState<number | null>(null);
@@ -128,6 +132,40 @@ export default function SessionPage() {
   }, [sessionId]);
 
   useEffect(() => { loadReactions(); }, [loadReactions]);
+
+  // Who decides with whom. Pairing changes what every heart counts for, so the
+  // participants are reloaded alongside it.
+  const loadHouseholds = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/households`);
+      if (!res.ok) return;
+      setHouseholds((await res.json()).households ?? []);
+    } catch {
+      // Non-fatal: everyone reads as a household of one until this succeeds
+    }
+  }, [sessionId]);
+
+  const loadUsersAndHouseholds = useCallback(async () => {
+    const [usersRes] = await Promise.all([
+      fetch(`/api/sessions/${sessionId}`),
+      loadHouseholds(),
+    ]);
+    if (usersRes.ok) setUsers((await usersRes.json()).users ?? []);
+  }, [sessionId, loadHouseholds]);
+
+  useEffect(() => { loadHouseholds(); }, [loadHouseholds]);
+
+  // Which listings every household is yes on. Derived from convergence so the
+  // pin glow, the shortlist and the dashboard can never disagree.
+  const unanimousListingIds = useMemo(() => {
+    const { favorites } = computeConvergence({
+      listings: properties,
+      reactions,
+      participants: users,
+      households,
+    });
+    return new Set(favorites.filter((f) => f.unanimous).map((f) => f.listing.id!));
+  }, [properties, reactions, users, households]);
 
   // Votes from the others land live; refetching the whole (tiny) set is
   // simpler and safer than patching state from realtime payloads
@@ -622,6 +660,13 @@ export default function SessionPage() {
             properties={properties}
             reactions={reactions}
             users={users}
+            households={households}
+          />
+          <HouseholdsCard
+            sessionId={sessionId}
+            users={users}
+            households={households}
+            onChanged={loadUsersAndHouseholds}
           />
           <ZoneLegend
             users={users}
@@ -654,6 +699,7 @@ export default function SessionPage() {
             myUserId={myUserId}
             onToggleReaction={handleToggleReaction}
             newListingKeys={newListingKeys}
+            unanimousListingIds={unanimousListingIds}
           />
         </div>
       </main>

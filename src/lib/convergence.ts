@@ -1,10 +1,8 @@
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
+import { Household } from '@/types/household';
 
-export interface Household {
-  id: string;
-  name: string;
-}
+export type { Household };
 
 export interface Participant {
   id: string;

@@ -2,10 +2,12 @@
 // domain verbs, returns the project's domain types, and owns the session-scoping
 // and typed-error invariants. API routes are thin shells over these functions.
 //
-// Grows one aggregate at a time. Currently: sessions, users, reactions.
+// Grows one aggregate at a time. Currently: sessions, users, households,
+// reactions.
 
 import { createClient } from '@/utils/supabase/server';
 import { CommuteConstraint } from '@/types/user';
+import { Household } from '@/types/household';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
 import { resolveToggle } from './reactions';
@@ -313,6 +315,60 @@ export async function removeUser(sessionId: string, userId: string): Promise<voi
     .from('session_users')
     .delete()
     .eq('id', userId)
+    .eq('session_id', sessionId);
+  if (error) throw error;
+}
+
+// Every household in a session. A participant belonging to none is a household
+// of one, resolved when convergence is computed rather than stored here.
+export async function listHouseholds(sessionId: string): Promise<Household[]> {
+  const db = await createClient();
+  const { data, error } = await db
+    .from('households')
+    .select('id, name')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Household[];
+}
+
+// Pair participants into one household. Members already in another household
+// move across; that household is left to be dissolved separately if empty.
+export async function formHousehold(
+  sessionId: string,
+  name: string,
+  memberIds: string[],
+): Promise<Household> {
+  if (!name?.trim()) throw new Invalid('A household needs a name');
+  if (memberIds.length < 2) throw new Invalid('A household needs at least two participants');
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('households')
+    .insert([{ session_id: sessionId, name: name.trim() } as never])
+    .select('id, name')
+    .single();
+  if (error) throw error;
+
+  const household = data as unknown as Household;
+  const { error: linkError } = await db
+    .from('session_users')
+    .update({ household_id: household.id } as never)
+    .eq('session_id', sessionId)
+    .in('id', memberIds);
+  if (linkError) throw linkError;
+
+  return household;
+}
+
+// Dissolve a household, returning its members to households of one. The
+// household_id foreign key is ON DELETE SET NULL, so people are never deleted.
+export async function dissolveHousehold(sessionId: string, householdId: string): Promise<void> {
+  const db = await createClient();
+  const { error } = await db
+    .from('households')
+    .delete()
+    .eq('id', householdId)
     .eq('session_id', sessionId);
   if (error) throw error;
 }
