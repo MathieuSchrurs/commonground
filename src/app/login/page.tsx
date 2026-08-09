@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { createClient } from '@/utils/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -252,20 +253,30 @@ export default function LoginPage() {
         </Card>
 
         {!sentTo && (
-          <button
-            type="button"
-            onClick={() => {
-              setMode(mode === 'signin' ? 'signup' : 'signin');
-              setError('');
-            }}
-            className="mt-6 w-full text-center text-xs text-muted-foreground hover:text-brand"
-          >
-            {mode === 'signin'
-              ? "Don't have an account? Create one"
-              : mode === 'signup'
-                ? 'Already have an account? Sign in'
-                : 'Back to sign in'}
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setMode(mode === 'signin' ? 'signup' : 'signin');
+                setError('');
+              }}
+              className="mt-6 w-full text-center text-xs text-muted-foreground hover:text-brand"
+            >
+              {mode === 'signin'
+                ? "Don't have an account? Create one"
+                : mode === 'signup'
+                  ? 'Already have an account? Sign in'
+                  : 'Back to sign in'}
+            </button>
+            {process.env.NODE_ENV === 'development' && (
+              <Link
+                href="/login/dev"
+                className="mt-3 block w-full text-center text-xs text-muted-foreground hover:text-brand"
+              >
+                Dev: sign in as an account in this database
+              </Link>
+            )}
+          </>
         )}
       </div>
     </div>

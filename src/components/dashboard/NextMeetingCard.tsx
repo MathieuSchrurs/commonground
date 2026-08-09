@@ -93,7 +93,7 @@ export default function NextMeetingCard({
   };
 
   return (
-    <Card>
+    <Card className="lg:aspect-[4/3]">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
           <CalendarClock className="h-4 w-4" />
@@ -106,7 +106,7 @@ export default function NextMeetingCard({
           </Button>
         )}
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         {editing ? (
           <div className="space-y-3">
             <div className="space-y-1.5">

@@ -76,7 +76,7 @@ export default function TodosCard({
   };
 
   return (
-    <Card>
+    <Card className="lg:aspect-[4/3]">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
           <ListChecks className="h-4 w-4" />
@@ -86,7 +86,7 @@ export default function TodosCard({
           {openCount} open
         </span>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         {/* Two concepts, one card: a decision is settled and can only be
             superseded; a todo is work that gets done and disappears. */}
         <DecisionsSection
