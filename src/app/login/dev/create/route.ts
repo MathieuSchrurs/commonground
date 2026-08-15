@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServiceRoleClient } from '@/lib/supabase';
 import { signInAs } from '../signInAs';
-import { isDevLoginEnabled } from '../guard';
+import { isDevLoginEnabled, safeRedirectPath } from '../guard';
 
 // Dev-only: create a local account (no confirmation email, no password to
 // remember) and sign in as it immediately. Guarded so it can never run outside
@@ -32,6 +32,6 @@ export async function POST(request: Request) {
     return NextResponse.redirect(new URL('/login/dev', request.url), { status: 303 });
   }
 
-  const redirectTo = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  const redirectTo = safeRedirectPath(next);
   return NextResponse.redirect(new URL(redirectTo, request.url), { status: 303 });
 }

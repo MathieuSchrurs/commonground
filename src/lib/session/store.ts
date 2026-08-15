@@ -12,7 +12,7 @@ import { Decision } from '@/types/decisions';
 import { MeetingItem, Todo } from '@/types/todos';
 import { Meeting } from '@/types/meeting';
 import { Folder, SharedFile } from '@/types/files';
-import { canMoveFolder, descendantsOf, MAX_FOLDER_DEPTH } from '@/lib/folders';
+import { depthOf, MAX_FOLDER_DEPTH } from '@/lib/folders';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
@@ -735,13 +735,14 @@ export async function createFolder(
 ): Promise<Folder> {
   if (!name?.trim()) throw new Invalid('A folder name is required');
 
-  // A new folder is a leaf, so it only has to fit under its parent. Checked
-  // here and not just in the hub, because the route is reachable directly.
+  // A new folder is always a leaf, so it only has to fit under its parent —
+  // checked here and not just in the hub, because the route is reachable
+  // directly.
   if (parentId) {
     const siblings = await listFolders(sessionId);
     const parent = siblings.find((f) => f.id === parentId);
     if (!parent) throw new NotFound('folder', parentId);
-    if (!canMoveFolder([...siblings, { id: 'new', session_id: sessionId, name, parent_id: null }], 'new', parentId)) {
+    if (depthOf(siblings, parentId) >= MAX_FOLDER_DEPTH) {
       throw new Invalid(`Folders can only go ${MAX_FOLDER_DEPTH} levels deep`);
     }
   }
@@ -758,36 +759,34 @@ export async function createFolder(
 
 // Move a folder into another (null = the root). Its children and files travel
 // with it, since they are attached by id rather than by path.
+//
+// Goes through the move_folder RPC rather than read-validate-write here,
+// because two of those as separate round trips can each validate against a
+// pre-move snapshot: "move A into B" and "move B into A" run concurrently,
+// neither sees the other's not-yet-committed change, and both pass — a cycle
+// no single write's trigger catches. The RPC locks the session's folders for
+// the transaction, so a second concurrent move waits and then re-validates
+// against the first move's result.
 export async function moveFolder(
   sessionId: string,
   folderId: string,
   parentId: string | null,
 ): Promise<Folder> {
-  const folders = await listFolders(sessionId);
-  if (!folders.some((f) => f.id === folderId)) throw new NotFound('folder', folderId);
-  if (parentId !== null && !folders.some((f) => f.id === parentId)) {
-    throw new NotFound('folder', parentId);
-  }
-
-  if (!canMoveFolder(folders, folderId, parentId)) {
-    throw new Invalid(
-      parentId !== null && descendantsOf(folders, folderId).includes(parentId)
-        ? 'A folder cannot be moved inside itself'
-        : `Folders can only go ${MAX_FOLDER_DEPTH} levels deep`,
-    );
-  }
-
   const db = await createClient();
-  const { data, error } = await db
-    .from('session_folders')
-    .update({ parent_id: parentId } as never)
-    .eq('id', folderId)
-    .eq('session_id', sessionId)
-    .select()
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) throw new NotFound('folder', folderId);
-  return data as unknown as Folder;
+  const { data, error } = await db.rpc('move_folder', {
+    p_session_id: sessionId,
+    p_folder_id: folderId,
+    p_parent_id: parentId,
+    p_max_depth: MAX_FOLDER_DEPTH,
+  } as never);
+  if (error) {
+    if (error.code === 'P0002') throw new NotFound('folder', error.message.replace(/^folder not found: /, ''));
+    if (error.code === 'P0001') throw new Invalid(error.message);
+    throw error;
+  }
+  const folder = Array.isArray(data) ? data[0] : data;
+  if (!folder) throw new NotFound('folder', folderId);
+  return folder as unknown as Folder;
 }
 
 // Delete a folder. Its files *and* its child folders fall back to the root via

@@ -3,7 +3,7 @@
 import React, { useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, FileText, Folder as FolderIcon, FolderPlus, Trash2, Upload, ExternalLink } from 'lucide-react';
 import { SharedFile, Folder } from '@/types/files';
-import { buildFolderTree, folderPaths, FolderNode, MAX_FOLDER_DEPTH } from '@/lib/folders';
+import { buildFolderTree, canMoveFolder, folderPaths, FolderNode, MAX_FOLDER_DEPTH } from '@/lib/folders';
 import { createClient } from '@/utils/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -275,7 +275,7 @@ export default function SharedFilesCard({
             >
               <option value="">Top level</option>
               {parentOptions
-                .filter((p) => p.id !== node.folder.id)
+                .filter((p) => canMoveFolder(folders, node.folder.id, p.id))
                 .map((p) => (
                   <option key={p.id} value={p.id}>{p.path}</option>
                 ))}

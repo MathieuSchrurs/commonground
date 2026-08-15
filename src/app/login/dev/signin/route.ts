@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { signInAs } from '../signInAs';
-import { isDevLoginEnabled } from '../guard';
+import { isDevLoginEnabled, safeRedirectPath } from '../guard';
 
 // Dev-only: sign in as any account in the local database. Guarded so it can
 // never run outside local development.
@@ -17,6 +17,6 @@ export async function POST(request: Request) {
     return NextResponse.redirect(new URL('/login/dev', request.url), { status: 303 });
   }
 
-  const redirectTo = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  const redirectTo = safeRedirectPath(next);
   return NextResponse.redirect(new URL(redirectTo, request.url), { status: 303 });
 }

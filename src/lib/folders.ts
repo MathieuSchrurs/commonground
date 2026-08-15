@@ -95,8 +95,11 @@ function subtreeHeight(folders: Folder[], folderId: string): number {
     : 1 + Math.max(...children.map((c) => subtreeHeight(folders.filter((f) => f.id !== folderId), c.id)));
 }
 
-// Depth of a folder from the root, counting the root level as 1.
-function depthOf(folders: Folder[], folderId: string | null): number {
+// Depth of a folder from the root, counting the root level as 1. Exported so
+// a caller placing a brand-new leaf (subtreeHeight always 1) can check
+// `depthOf(folders, parentId) < MAX_FOLDER_DEPTH` directly, instead of
+// building a fake Folder just to run it through canMoveFolder.
+export function depthOf(folders: Folder[], folderId: string | null): number {
   let depth = 0;
   let current = folderId;
   const seen = new Set<string>();
