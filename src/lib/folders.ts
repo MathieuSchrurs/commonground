@@ -95,20 +95,40 @@ function subtreeHeight(folders: Folder[], folderId: string): number {
     : 1 + Math.max(...children.map((c) => subtreeHeight(folders.filter((f) => f.id !== folderId), c.id)));
 }
 
+// The chain of folders from the root down to (and including) this one — what
+// a breadcrumb reads directly off, and what depthOf counts the length of.
+// Stops early rather than throwing on a dangling parent, and a cycle can't
+// loop it forever.
+export function ancestorChain(folders: Folder[], folderId: string | null): Folder[] {
+  const chain: Folder[] = [];
+  let current = folderId;
+  const seen = new Set<string>();
+  while (current !== null && !seen.has(current)) {
+    const folder = folders.find((f) => f.id === current);
+    if (!folder) break;
+    chain.unshift(folder);
+    seen.add(current);
+    current = folder.parent_id ?? null;
+  }
+  return chain;
+}
+
 // Depth of a folder from the root, counting the root level as 1. Exported so
 // a caller placing a brand-new leaf (subtreeHeight always 1) can check
 // `depthOf(folders, parentId) < MAX_FOLDER_DEPTH` directly, instead of
 // building a fake Folder just to run it through canMoveFolder.
 export function depthOf(folders: Folder[], folderId: string | null): number {
-  let depth = 0;
-  let current = folderId;
-  const seen = new Set<string>();
-  while (current !== null && !seen.has(current)) {
-    seen.add(current);
-    depth += 1;
-    current = folders.find((f) => f.id === current)?.parent_id ?? null;
-  }
-  return depth;
+  return ancestorChain(folders, folderId).length;
+}
+
+// What the hub should be looking at after `folders` changes — the same
+// folder if it's still there, otherwise the root. Realtime deletes are the
+// reason this exists: a folder disappearing out from under whoever's
+// browsing it must always bounce them back, even when it was the last
+// folder in the session.
+export function resolveCurrentFolder(folders: Folder[], currentFolderId: string | null): string | null {
+  if (currentFolderId === null) return null;
+  return folders.some((f) => f.id === currentFolderId) ? currentFolderId : null;
 }
 
 // Whether a folder may be moved into `into` (null = the root).
@@ -129,11 +149,20 @@ export function canMoveFolder(
   return depthOf(folders, into) + subtreeHeight(folders, folderId) <= MAX_FOLDER_DEPTH;
 }
 
+// A folder's full display path and depth. Named so it can be threaded
+// through as a parameter (e.g. into the move-destination helpers below)
+// instead of every caller recomputing folderPaths for itself.
+export interface FolderPathEntry {
+  id: string;
+  path: string;
+  depth: number;
+}
+
 // Every folder with its full path and depth, in tree order. The path is what
 // makes two folders both called "Survey" distinguishable in a dropdown; the
 // depth lets a caller hide parents that are already at the limit.
-export function folderPaths(folders: Folder[]): { id: string; path: string; depth: number }[] {
-  const out: { id: string; path: string; depth: number }[] = [];
+export function folderPaths(folders: Folder[]): FolderPathEntry[] {
+  const out: FolderPathEntry[] = [];
   const walk = (nodes: FolderNode[], prefix: string, depth: number) => {
     for (const node of nodes) {
       const path = prefix ? `${prefix} / ${node.folder.name}` : node.folder.name;
@@ -143,4 +172,41 @@ export function folderPaths(folders: Folder[]): { id: string; path: string; dept
   };
   walk(buildFolderTree(folders, []), '', 1);
   return out;
+}
+
+// A place a file or folder could be moved to: a real folder (id + display
+// path), or the hub's top level (id null).
+export interface MoveDestination {
+  id: string | null;
+  path: string;
+}
+
+// Every folder a file could move into, plus the top level when the file
+// isn't already there. Files have no depth limit of their own, so any folder
+// other than the one it's already in is fair game.
+//
+// Takes the already-computed folder paths rather than the raw folder list, so
+// a caller rendering many rows (one "Move to" menu per file/folder) builds
+// the path list once and passes it in, instead of every row recomputing it.
+export function fileMoveDestinations(paths: FolderPathEntry[], currentFolderId: string | null): MoveDestination[] {
+  const destinations: MoveDestination[] = [];
+  if (currentFolderId !== null) destinations.push({ id: null, path: 'Shared files (top level)' });
+  for (const p of paths) {
+    if (p.id !== currentFolderId) destinations.push({ id: p.id, path: p.path });
+  }
+  return destinations;
+}
+
+// Every folder a folder could move into, plus the top level when it isn't
+// already there — reusing canMoveFolder's self/descendant/depth rules rather
+// than re-checking them here. Still needs the raw folder list (unlike the
+// file case) because canMoveFolder walks descendants and subtree depth.
+export function folderMoveDestinations(folders: Folder[], paths: FolderPathEntry[], folderId: string): MoveDestination[] {
+  const folder = folders.find((f) => f.id === folderId);
+  const destinations: MoveDestination[] = [];
+  if (folder && folder.parent_id !== null) destinations.push({ id: null, path: 'Top level' });
+  for (const p of paths) {
+    if (p.id !== folderId && canMoveFolder(folders, folderId, p.id)) destinations.push({ id: p.id, path: p.path });
+  }
+  return destinations;
 }

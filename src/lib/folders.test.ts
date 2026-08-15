@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { buildFolderTree, canMoveFolder, descendantsOf, folderPaths, MAX_FOLDER_DEPTH } from './folders';
+import {
+  ancestorChain,
+  buildFolderTree,
+  canMoveFolder,
+  depthOf,
+  descendantsOf,
+  fileMoveDestinations,
+  folderMoveDestinations,
+  folderPaths,
+  MAX_FOLDER_DEPTH,
+  resolveCurrentFolder,
+} from './folders';
 import { Folder, SharedFile } from '@/types/files';
 
 function folder(id: string, name: string, parent_id: string | null = null): Folder {
@@ -160,5 +171,90 @@ describe('folderPaths', () => {
     const paths = folderPaths(nested);
     expect(paths.find((p) => p.id === 'houses')!.depth).toBe(1);
     expect(paths.find((p) => p.id === 'sur')!.depth).toBe(3);
+  });
+});
+
+describe('ancestorChain', () => {
+  it('returns nothing for the root', () => {
+    expect(ancestorChain(nested, null)).toEqual([]);
+  });
+
+  it('returns the chain from the root down to the folder itself, inclusive', () => {
+    expect(ancestorChain(nested, 'sur').map((f) => f.id)).toEqual(['houses', 'k12', 'sur']);
+  });
+
+  it('stops early rather than throwing on a dangling parent', () => {
+    const chain = ancestorChain([folder('orphan', 'Orphan', 'gone')], 'orphan');
+    expect(chain.map((f) => f.id)).toEqual(['orphan']);
+  });
+
+  it('terminates on a cycle instead of looping', () => {
+    const chain = ancestorChain([folder('a', 'A', 'b'), folder('b', 'B', 'a')], 'a');
+    expect(chain.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('depthOf', () => {
+  it('is the length of the ancestor chain', () => {
+    expect(depthOf(nested, null)).toBe(ancestorChain(nested, null).length);
+    expect(depthOf(nested, 'sur')).toBe(ancestorChain(nested, 'sur').length);
+    expect(depthOf(nested, 'sur')).toBe(3);
+  });
+});
+
+describe('resolveCurrentFolder', () => {
+  it('returns the id unchanged when the folder still exists', () => {
+    expect(resolveCurrentFolder(nested, 'sur')).toBe('sur');
+  });
+
+  it('falls back to the root when the folder is gone', () => {
+    expect(resolveCurrentFolder(nested, 'deleted')).toBeNull();
+  });
+
+  it('falls back to the root even when there are no folders left at all', () => {
+    expect(resolveCurrentFolder([], 'sur')).toBeNull();
+  });
+
+  it('passes null straight through', () => {
+    expect(resolveCurrentFolder(nested, null)).toBeNull();
+  });
+});
+
+describe('fileMoveDestinations', () => {
+  it('offers every other folder plus the top level, when the file is inside a folder', () => {
+    const destinations = fileMoveDestinations(folderPaths(nested), 'sur');
+    expect(destinations.map((d) => d.id)).toContain(null);
+    expect(destinations.map((d) => d.id)).not.toContain('sur');
+    expect(destinations.map((d) => d.id)).toEqual(expect.arrayContaining(['houses', 'k12', 'mort']));
+  });
+
+  it('omits the top level when the file is already there', () => {
+    const destinations = fileMoveDestinations(folderPaths(nested), null);
+    expect(destinations.map((d) => d.id)).not.toContain(null);
+    expect(destinations.map((d) => d.id)).toEqual(expect.arrayContaining(['houses', 'k12', 'sur', 'mort']));
+  });
+
+  it('is empty for a top-level file in a session with no folders', () => {
+    expect(fileMoveDestinations(folderPaths([]), null)).toEqual([]);
+  });
+});
+
+describe('folderMoveDestinations', () => {
+  it('reuses canMoveFolder\'s rules: no self, no descendant, respects the depth limit', () => {
+    const destinations = folderMoveDestinations(nested, folderPaths(nested), 'houses');
+    const ids = destinations.map((d) => d.id);
+    expect(ids).not.toContain('houses');
+    expect(ids).not.toContain('k12');
+    expect(ids).not.toContain('sur');
+  });
+
+  it('offers the top level when the folder is nested, and omits it when already there', () => {
+    expect(folderMoveDestinations(nested, folderPaths(nested), 'sur').map((d) => d.id)).toContain(null);
+    expect(folderMoveDestinations(nested, folderPaths(nested), 'houses').map((d) => d.id)).not.toContain(null);
+  });
+
+  it('is empty for the only folder in a session, already at the top level', () => {
+    const solo = [folder('solo', 'Solo')];
+    expect(folderMoveDestinations(solo, folderPaths(solo), 'solo')).toEqual([]);
   });
 });
