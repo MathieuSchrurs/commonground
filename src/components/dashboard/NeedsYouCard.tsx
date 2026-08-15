@@ -34,14 +34,16 @@ export default function NeedsYouCard({
   const nothing = awaiting.length === 0 && myTodos.length === 0 && myItems.length === 0;
 
   return (
-    <Card>
+    <Card className={nothing ? undefined : 'border-l-2 border-l-brand bg-gradient-to-br from-brand/5 to-transparent'}>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
-          <Hand className="h-4 w-4" />
+          <span className={`flex items-center justify-center rounded-full p-1 ${nothing ? '' : 'bg-brand/10 text-brand'}`}>
+            <Hand className="h-4 w-4" />
+          </span>
           Needs you
         </CardTitle>
         {!nothing && (
-          <span className="text-xs font-mono tabular-nums text-muted-foreground">
+          <span className="text-xs font-mono tabular-nums text-brand font-semibold">
             {awaiting.length + myTodos.length + myItems.length}
           </span>
         )}

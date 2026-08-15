@@ -122,7 +122,7 @@ export default function TodosCard({
               <option key={u.id} value={u.id}>{u.name}</option>
             ))}
           </select>
-          <Button size="sm" onClick={handleAdd} disabled={!title.trim()}>
+          <Button size="sm" variant="brand" onClick={handleAdd} disabled={!title.trim()}>
             Add
           </Button>
         </div>

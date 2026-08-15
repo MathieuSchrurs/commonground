@@ -54,7 +54,7 @@ export default function SessionHeader({ sessionId }: SessionHeaderProps) {
               href={tab.href}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                 tab.active
-                  ? 'bg-accent text-accent-foreground'
+                  ? 'bg-brand/10 text-brand'
                   : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
               }`}
             >

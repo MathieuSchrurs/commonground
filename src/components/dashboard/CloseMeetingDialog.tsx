@@ -89,7 +89,7 @@ export default function CloseMeetingDialog({
       />
 
       <div className="flex gap-2">
-        <Button size="sm" onClick={submit} disabled={busy}>
+        <Button size="sm" variant="brand" onClick={submit} disabled={busy}>
           Close meeting
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>

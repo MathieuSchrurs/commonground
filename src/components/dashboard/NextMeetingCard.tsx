@@ -137,7 +137,7 @@ export default function NextMeetingCard({
               />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleSave} disabled={!meetsAt || saving}>
+              <Button size="sm" variant="brand" onClick={handleSave} disabled={!meetsAt || saving}>
                 {saving ? 'Saving…' : 'Save'}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>

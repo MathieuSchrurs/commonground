@@ -133,7 +133,7 @@ export default function DecisionsSection({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !busy && text.trim()) record(); }}
         />
-        <Button size="sm" onClick={record} disabled={busy || !text.trim()}>
+        <Button size="sm" variant="brand" onClick={record} disabled={busy || !text.trim()}>
           {supersedesId ? 'Replace' : 'Record'}
         </Button>
       </div>
