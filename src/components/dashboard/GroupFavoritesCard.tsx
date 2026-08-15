@@ -21,7 +21,7 @@ function formatPrice(price?: number): string {
 // card instead — the two never show the same house.
 export default function GroupFavoritesCard({ favorites }: GroupFavoritesCardProps) {
   return (
-    <Card>
+    <Card className="ring-1 ring-foreground/20">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
           <Star className="h-4 w-4" />

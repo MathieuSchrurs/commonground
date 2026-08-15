@@ -231,7 +231,12 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-background flex flex-col">
       <SessionHeader sessionId={sessionId} />
 
-      <main className="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 py-6 space-y-4">
+      {/* max-w-[1600px] rather than a bigger Tailwind step: it's comfortably
+          wider than a 14" MacBook Pro's 1512px logical viewport (the most
+          common "wide screen" this will actually be viewed on), so the cap
+          doesn't engage there at all and the page reads as full-width — while
+          still bounding truly huge external monitors so cards don't sprawl. */}
+      <main className="flex-1 mx-auto w-full max-w-5xl xl:max-w-[1600px] px-4 sm:px-6 py-6 space-y-4">
 
         <NeedsYouCard
           convergence={convergence}
@@ -241,7 +246,10 @@ export default function DashboardPage() {
           myHouseholdId={myHouseholdId}
         />
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        {/* Two cards per row from lg, all four side-by-side from xl — the
+            container above widens to match, so the extra room goes toward
+            showing more cards at once rather than stretching each one. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4 items-stretch">
           <NextMeetingCard
             meeting={meeting}
             canEdit={!!myUserId}
@@ -262,9 +270,6 @@ export default function DashboardPage() {
             decisions={decisions}
             onDecisionsChanged={loadDecisions}
           />
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <GroupFavoritesCard favorites={convergence.favorites} />
           <SplitVotesCard contested={convergence.contested} />
         </div>

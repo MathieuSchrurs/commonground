@@ -21,7 +21,7 @@ function formatPrice(price?: number): string {
 // not a kill: these houses stay alive until the group decides otherwise.
 export default function SplitVotesCard({ contested }: SplitVotesCardProps) {
   return (
-    <Card>
+    <Card className="ring-1 ring-foreground/20">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
           <MessageCircleWarning className="h-4 w-4" />

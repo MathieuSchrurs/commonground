@@ -383,7 +383,7 @@ export default function SharedFilesCard({
   const empty = subfolders.length === 0 && currentFiles.length === 0;
 
   return (
-    <Card>
+    <Card className="ring-1 ring-foreground/20">
       <CardContent className="space-y-3">
         {/* The breadcrumb's root crumb ("Shared files") doubles as the card's
             title — a separate CardHeader saying the same thing right above it

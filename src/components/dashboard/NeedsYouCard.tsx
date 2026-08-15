@@ -5,6 +5,7 @@ import { CheckCircle2, ExternalLink, Hand, Heart, ListChecks, MessageSquare } fr
 import { Convergence, listingsAwaiting } from '@/lib/convergence';
 import { MeetingItem, Todo } from '@/types/todos';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 interface NeedsYouCardProps {
   convergence: Convergence;
@@ -34,7 +35,7 @@ export default function NeedsYouCard({
   const nothing = awaiting.length === 0 && myTodos.length === 0 && myItems.length === 0;
 
   return (
-    <Card className={nothing ? undefined : 'border-l-2 border-l-brand bg-gradient-to-br from-brand/5 to-transparent'}>
+    <Card className={cn('ring-1 ring-foreground/20', !nothing && 'border-l-2 border-l-brand bg-gradient-to-br from-brand/5 to-transparent')}>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
           <span className={`flex items-center justify-center rounded-full p-1 ${nothing ? '' : 'bg-brand/10 text-brand'}`}>

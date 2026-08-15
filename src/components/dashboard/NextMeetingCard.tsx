@@ -93,7 +93,7 @@ export default function NextMeetingCard({
   };
 
   return (
-    <Card className="lg:aspect-[4/3]">
+    <Card className="lg:aspect-[4/3] xl:aspect-auto ring-1 ring-foreground/20">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2">
           <CalendarClock className="h-4 w-4" />
