@@ -43,6 +43,15 @@ function formatWhen(iso: string): string {
   });
 }
 
+// First letter of the first and last name, so "who raised this" fits without
+// taking as much room as the full name did.
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export default function NextMeetingCard({
   meeting,
   canEdit,
@@ -234,8 +243,11 @@ export default function NextMeetingCard({
                     {item.text}
                   </span>
                   {item.created_by && (
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {nameOf.get(item.created_by) ?? '?'}
+                    <span
+                      className="text-xs text-muted-foreground shrink-0"
+                      title={nameOf.get(item.created_by)}
+                    >
+                      {nameOf.get(item.created_by) ? initials(nameOf.get(item.created_by)!) : '?'}
                     </span>
                   )}
                   {canEdit && (
