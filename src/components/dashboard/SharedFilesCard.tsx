@@ -128,10 +128,35 @@ export default function SharedFilesCard({
   }, [folders, files]);
 
   const currentNode = safeCurrentFolderId ? nodeById.get(safeCurrentFolderId) : null;
-  const subfolders = safeCurrentFolderId === null ? tree : currentNode?.children ?? [];
-  const currentFiles = safeCurrentFolderId === null ? files.filter((f) => f.folder_id === null) : currentNode?.files ?? [];
+  // Stable references when the underlying data hasn't changed, not a fresh
+  // array every render — the move-destination memos below key off these, and
+  // files.filter(...) in particular would otherwise "change" on every render
+  // regardless of whether files actually did.
+  const subfolders = useMemo(
+    () => (safeCurrentFolderId === null ? tree : currentNode?.children ?? []),
+    [safeCurrentFolderId, tree, currentNode],
+  );
+  const currentFiles = useMemo(
+    () => (safeCurrentFolderId === null ? files.filter((f) => f.folder_id === null) : currentNode?.files ?? []),
+    [safeCurrentFolderId, files, currentNode],
+  );
   const crumbs = ancestorChain(folders, safeCurrentFolderId);
   const atMaxDepth = depthOf(folders, safeCurrentFolderId) >= MAX_FOLDER_DEPTH;
+
+  // One pass over the visible rows instead of recomputing a "Move to" list
+  // inside every row's own render call — folderMoveDestinations in
+  // particular walks descendants per candidate, and re-render is frequent
+  // (every keystroke in a popover, every drag-over toggle).
+  const fileDestinationsById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof fileMoveDestinations>>();
+    for (const f of currentFiles) map.set(f.id, fileMoveDestinations(paths, f.folder_id));
+    return map;
+  }, [currentFiles, paths]);
+  const folderDestinationsById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof folderMoveDestinations>>();
+    for (const node of subfolders) map.set(node.folder.id, folderMoveDestinations(folders, paths, node.folder.id));
+    return map;
+  }, [subfolders, folders, paths]);
 
   // Every write reports its reason rather than silently doing nothing — the
   // server rejects moves that would nest a folder inside itself or go too deep.
@@ -259,9 +284,9 @@ export default function SharedFilesCard({
   };
 
   const renderFile = (f: SharedFile) => {
-    const destinations = fileMoveDestinations(paths, f.folder_id);
+    const destinations = fileDestinationsById.get(f.id) ?? [];
     return (
-      <div key={f.id} className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-accent/30 transition-colors">
+      <li key={f.id} className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-accent/30 transition-colors">
         <a
           href={publicUrl(f.storage_path)}
           target="_blank"
@@ -305,14 +330,14 @@ export default function SharedFilesCard({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </li>
     );
   };
 
   const renderFolder = (node: FolderNode) => {
-    const destinations = folderMoveDestinations(folders, paths, node.folder.id);
+    const destinations = folderDestinationsById.get(node.folder.id) ?? [];
     return (
-      <div key={node.folder.id} className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-accent/30 transition-colors">
+      <li key={node.folder.id} className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-accent/30 transition-colors">
         <button
           type="button"
           onClick={() => setCurrentFolderId(node.folder.id)}
@@ -351,7 +376,7 @@ export default function SharedFilesCard({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </li>
     );
   };
 
@@ -392,7 +417,16 @@ export default function SharedFilesCard({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <Popover open={newFolderOpen} onOpenChange={setNewFolderOpen}>
+            <Popover
+              open={newFolderOpen}
+              onOpenChange={(open) => {
+                setNewFolderOpen(open);
+                // Cover every way it can close — Cancel, Escape, an outside
+                // click — not just the success path, so stale text from a
+                // folder you didn't create never resurfaces next time.
+                if (!open) setNewFolder('');
+              }}
+            >
               <PopoverTrigger
                 disabled={atMaxDepth}
                 className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-1.5')}
@@ -412,7 +446,7 @@ export default function SharedFilesCard({
                   onKeyDown={(e) => { if (e.key === 'Enter' && newFolder.trim()) handleAddFolder(); }}
                 />
                 <div className="flex justify-end gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setNewFolderOpen(false); setNewFolder(''); }}>Cancel</Button>
                   <Button size="sm" variant="brand" onClick={handleAddFolder} disabled={!newFolder.trim()}>
                     Create
                   </Button>
@@ -494,7 +528,14 @@ export default function SharedFilesCard({
             Dropping a file anywhere in here uploads it to this folder. */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
+          onDragLeave={(e) => {
+            // The rows inside are full of nested buttons/links/menu triggers,
+            // so the pointer crossing from one row to the next fires dragleave
+            // on this container too — only actually leaving it should clear
+            // the highlight, or it flickers on and off throughout the drag.
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            setDragOver(false);
+          }}
           onDrop={(e) => { e.preventDefault(); setDragOver(false); uploadFiles(e.dataTransfer.files, safeCurrentFolderId); }}
           className={`rounded-lg transition-colors ${dragOver ? 'bg-brand/5 ring-2 ring-brand/40' : ''}`}
         >
@@ -507,10 +548,10 @@ export default function SharedFilesCard({
                 : 'Empty — drop files here, or move some in.'}
             </p>
           ) : (
-            <div className="space-y-0.5">
+            <ul className="space-y-0.5 list-none">
               {subfolders.map(renderFolder)}
               {currentFiles.map(renderFile)}
-            </div>
+            </ul>
           )}
         </div>
       </CardContent>
