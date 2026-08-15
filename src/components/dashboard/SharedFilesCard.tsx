@@ -9,6 +9,7 @@ import {
   Home,
   MoreHorizontal,
   Move,
+  Pencil,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -90,6 +91,8 @@ export default function SharedFilesCard({
   const [listingId, setListingId] = useState('');
   const [newFolder, setNewFolder] = useState('');
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFolderId, setUploadFolderId] = useState<string | null>(null);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
@@ -261,6 +264,20 @@ export default function SharedFilesCard({
       'Could not move the folder',
     );
 
+  const handleRenameFolder = async () => {
+    if (!renamingFolderId || !renameValue.trim()) return;
+    const ok = await send(
+      `/api/sessions/${sessionId}/folders/${renamingFolderId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: renameValue }),
+      },
+      'Could not rename the folder',
+    );
+    if (ok) setRenamingFolderId(null);
+  };
+
   // Say what will happen before wiping a folder: nothing inside is destroyed,
   // but it does move, and that is worth knowing before confirming.
   const handleDeleteFolder = (node: FolderNode) => {
@@ -336,6 +353,32 @@ export default function SharedFilesCard({
 
   const renderFolder = (node: FolderNode) => {
     const destinations = folderDestinationsById.get(node.folder.id) ?? [];
+    const renaming = renamingFolderId === node.folder.id;
+
+    if (renaming) {
+      return (
+        <li key={node.folder.id} className="flex items-center gap-2.5 rounded-lg px-2.5 py-2">
+          <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && renameValue.trim()) handleRenameFolder();
+              if (e.key === 'Escape') setRenamingFolderId(null);
+            }}
+            className="h-8"
+          />
+          <Button size="sm" variant="brand" onClick={handleRenameFolder} disabled={!renameValue.trim()}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setRenamingFolderId(null)}>
+            Cancel
+          </Button>
+        </li>
+      );
+    }
+
     return (
       <li key={node.folder.id} className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-accent/30 transition-colors">
         <button
@@ -357,6 +400,12 @@ export default function SharedFilesCard({
             <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => { setRenamingFolderId(node.folder.id); setRenameValue(node.folder.name); }}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Rename
+            </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger disabled={destinations.length === 0}>
                 <Move className="h-3.5 w-3.5" />

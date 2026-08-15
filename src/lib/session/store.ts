@@ -757,6 +757,27 @@ export async function createFolder(
   return data as unknown as Folder;
 }
 
+// Rename a folder in place. A simple update — unlike moveFolder, renaming
+// touches only this one row, so there's no cross-row invariant to race
+// against and no RPC is needed.
+export async function renameFolder(sessionId: string, folderId: string, name: string): Promise<Folder> {
+  if (!name?.trim()) throw new Invalid('A folder name is required');
+
+  const db = await createClient();
+  const { data, error } = await db
+    .from('session_folders')
+    .update({ name: name.trim() } as never)
+    .eq('id', folderId)
+    .eq('session_id', sessionId)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  // maybeSingle, so a row that does not exist (or is not ours) is a clean 404
+  // rather than an opaque 500 from single()'s "no rows" error.
+  if (!data) throw new NotFound('folder', folderId);
+  return data as unknown as Folder;
+}
+
 // Move a folder into another (null = the root). Its children and files travel
 // with it, since they are attached by id rather than by path.
 //
