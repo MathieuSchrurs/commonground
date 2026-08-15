@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "CommonGround",
-  description: "Find the perfect meeting point for everyone's commute",
+  description: "Find the ideal home, factoring in everyone's commute",
 };
 
 export default function RootLayout({
