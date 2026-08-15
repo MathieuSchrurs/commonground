@@ -13,6 +13,7 @@ import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
 import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
 import SplitVotesCard from '@/components/dashboard/SplitVotesCard';
 import TodosCard from '@/components/dashboard/TodosCard';
+import DecisionsCard from '@/components/dashboard/DecisionsCard';
 import SharedFilesCard from '@/components/dashboard/SharedFilesCard';
 import NeedsYouCard from '@/components/dashboard/NeedsYouCard';
 
@@ -267,22 +268,31 @@ export default function DashboardPage() {
             users={users}
             myUserId={myUserId}
             onChanged={loadTodos}
-            decisions={decisions}
-            onDecisionsChanged={loadDecisions}
           />
           <GroupFavoritesCard favorites={convergence.favorites} />
           <SplitVotesCard contested={convergence.contested} />
         </div>
 
-        <SharedFilesCard
-          sessionId={sessionId}
-          files={files}
-          folders={folders}
-          users={users}
-          houseOptions={houseOptions}
-          myUserId={myUserId}
-          onChanged={reloadHub}
-        />
+        {/* Shared files on the left, decisions on the right, stretched to
+            match each other's height. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+          <SharedFilesCard
+            sessionId={sessionId}
+            files={files}
+            folders={folders}
+            users={users}
+            houseOptions={houseOptions}
+            myUserId={myUserId}
+            onChanged={reloadHub}
+          />
+          <DecisionsCard
+            sessionId={sessionId}
+            decisions={decisions}
+            users={users}
+            myUserId={myUserId}
+            onChanged={loadDecisions}
+          />
+        </div>
       </main>
     </div>
   );
