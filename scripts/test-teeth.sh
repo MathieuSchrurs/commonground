@@ -10,19 +10,33 @@
 #   ./scripts/test-teeth.sh            # vs origin/main
 #   ./scripts/test-teeth.sh main       # vs a different base
 #
+# Kept compatible with the bash 3.2 that macOS still ships: no mapfile,
+# no associative arrays, no ${var^^}.
+#
 set -euo pipefail
 
 BASE_REF="${1:-origin/main}"
 BASE_SHA="$(git merge-base "$BASE_REF" HEAD)"
 PROBE="$(mktemp -d)/probe"
-trap 'git worktree remove --force "$PROBE" 2>/dev/null || true' EXIT
+
+cleanup() {
+  # Unlink before removing the worktree. node_modules in there is a symlink to
+  # the real one, and nothing in this script should ever be able to delete
+  # through it.
+  if [ -L "$PROBE/node_modules" ]; then
+    rm -f "$PROBE/node_modules"
+  fi
+  git worktree remove --force "$PROBE" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # --diff-filter=d so deleted tests don't get resurrected into the probe tree.
-mapfile -t TEST_FILES < <(
-  git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD | grep -E 'src/.*\.test\.ts$' || true
-)
+TEST_FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && TEST_FILES+=("$f")
+done < <(git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD | grep -E 'src/.*\.test\.ts$' || true)
 
-if [ ${#TEST_FILES[@]} -eq 0 ]; then
+if [ "${#TEST_FILES[@]}" -eq 0 ]; then
   echo "FAIL: no test files added or changed vs ${BASE_REF} (${BASE_SHA:0:8})" >&2
   echo "      Every work unit ships a test. If this change genuinely cannot be" >&2
   echo "      tested, that is a decision for a human, not a thing to skip." >&2
@@ -41,14 +55,16 @@ for f in "${TEST_FILES[@]}"; do
   git show "HEAD:$f" > "$PROBE/$f"
 done
 
-# The probe needs the alias config even if it predates it.
-[ -f "$PROBE/vitest.config.ts" ] || cp vitest.config.ts "$PROBE/vitest.config.ts"
+# The probe needs the alias config even if the base commit predates it.
+if [ ! -f "$PROBE/vitest.config.ts" ]; then
+  cp vitest.config.ts "$PROBE/vitest.config.ts"
+fi
 
-# Symlink rather than `npm ci` into the probe: this script runs on every work
-# unit and a full install each time is unusable. The tradeoff is that if the
-# branch ADDED a dependency the new test needs, the probe fails with a
-# module-not-found rather than a real assertion failure — which looks like a
-# pass here. The guard below catches the common shape of that.
+# Symlink rather than `npm ci` into the probe: this runs on every work unit and
+# a full install each time would be unusable. The tradeoff is that if the branch
+# ADDED a dependency the new test needs, the probe fails with module-not-found
+# rather than a real assertion failure — which would look like a pass. The
+# INCONCLUSIVE guard below catches the common shape of that.
 ln -s "$PWD/node_modules" "$PROBE/node_modules"
 
 echo "→ running the new tests against base (expecting them to FAIL)"
@@ -57,7 +73,7 @@ BASE_OUT="$(cd "$PROBE" && npx vitest run "${TEST_FILES[@]}" 2>&1)"
 BASE_CODE=$?
 set -e
 
-if [ $BASE_CODE -eq 0 ]; then
+if [ "$BASE_CODE" -eq 0 ]; then
   echo "$BASE_OUT" | tail -20
   echo >&2
   echo "FAIL: these tests already pass against ${BASE_SHA:0:8}." >&2
@@ -66,7 +82,7 @@ if [ $BASE_CODE -eq 0 ]; then
   exit 1
 fi
 
-if grep -qiE "cannot find (module|package)|failed to resolve import" <<<"$BASE_OUT"; then
+if echo "$BASE_OUT" | grep -qiE "cannot find (module|package)|failed to resolve import"; then
   echo "$BASE_OUT" | tail -20
   echo >&2
   echo "INCONCLUSIVE: the tests failed at base by failing to load, not by failing" >&2
