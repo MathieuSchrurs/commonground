@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches crawl.yml: 22+ for the native global WebSocket that
+          # @supabase/supabase-js needs at construction time.
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+  # `next build` is deliberately not here — Vercel already builds every push and
+  # every preview, and it needs the Supabase/Mapbox env to be meaningful. Adding
+  # it would double the cost to re-discover what Vercel tells us anyway.

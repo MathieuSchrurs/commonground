@@ -7,8 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:teeth": "./scripts/test-teeth.sh",
     "scrape": "tsx src/scraper/index.ts",
     "scrape:immoweb": "tsx src/scraper/index.ts --source immoweb",
     "scrape:zimmo": "tsx src/scraper/index.ts --source zimmo"
