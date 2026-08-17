@@ -28,7 +28,7 @@ Most frequently violated:
 ## 2. The session store is the only seam
 
 `src/lib/session/store.ts` owns all session-scoped data access. In a route
-handler under `src/app/api/`, these are violations:
+handler under `src/app/api/sessions/`, these are violations:
 
 - importing a Supabase client directly
 - snake_case fields crossing into domain types — mapping belongs in
@@ -38,6 +38,11 @@ handler under `src/app/api/`, these are violations:
 
 `src/app/api/sessions/[id]/todos/route.ts` is the reference shape: parse params,
 call one or two store functions, return a plain object.
+
+The non-session routes (`geocode`, `isochrone`, `intersection`, `scrape`) proxy
+Mapbox and the scraper rather than session data, so the store rule does not
+apply to them. The `route()` wrapper still should — error mapping belongs in one
+place regardless of what the handler talks to.
 
 ## 3. Typed errors
 
@@ -102,5 +107,9 @@ Reversing one of these without a new ADR is a violation:
   same way the code does — are a violation even when they pass. Expected values
   come from an independent source: a known-good literal, a worked example, the
   spec.
+- **A test that asserts a status code without asserting the body pins half the
+  behaviour.** `expect(res.status).toBe(404)` still passes when the message is
+  wrong, leaks user input, or changes shape. `src/lib/session/route.test.ts` is
+  the reference: status *and* body, every case.
 - *Judgement*: prefer a ratchet over a one-off assertion where the same mistake
   is likely to recur. `rls-ratchet.test.ts` is the model.
