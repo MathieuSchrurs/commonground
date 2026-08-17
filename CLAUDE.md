@@ -115,3 +115,21 @@ from the neighbouring table" error that had already happened twice.
   covers the same tables.
 - Don't rename domain concepts. `CONTEXT.md` lists the rejected synonym for each
   one, and those rejections were deliberate.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `MathieuSchrurs/commonground`, via the `gh` CLI. Never put an
+invite token or production data in an issue. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical role names, used verbatim: `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root, no
+`CONTEXT-MAP.md`. See `docs/agents/domain.md`.

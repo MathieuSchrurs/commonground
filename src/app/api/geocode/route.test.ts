@@ -19,17 +19,28 @@ describe('POST /api/geocode', () => {
   it('rejects a missing address with 400', async () => {
     const res = await POST(requestWithBody({}), ctx);
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'Address is required and must be a non-empty string',
+    });
   });
 
   it('rejects a whitespace-only address with 400', async () => {
     const res = await POST(requestWithBody({ address: '   ' }), ctx);
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'Address is required and must be a non-empty string',
+    });
   });
 
-  it('returns 404 when geocodeAddress finds nothing', async () => {
+  // The 404 body carries the address the caller sent, because NotFound renders
+  // as `${kind} not found: ${id}`. Pinned deliberately: it is a change from the
+  // old constant 'Address not found', and if we ever decide the endpoint should
+  // stop echoing input, this test is what will make us notice.
+  it('returns 404 naming the address when geocodeAddress finds nothing', async () => {
     mockedGeocodeAddress.mockResolvedValueOnce(null);
     const res = await POST(requestWithBody({ address: 'nowhere' }), ctx);
     expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'address not found: nowhere' });
   });
 
   it('returns 500 with a generic message when geocodeAddress throws', async () => {
