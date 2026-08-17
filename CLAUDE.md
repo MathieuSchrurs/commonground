@@ -71,7 +71,22 @@ never carry snake_case fields.
   `canMoveFolder` / `depthOf` in `src/lib/folders.ts` — including subtree
   height on a move, not just the destination's depth.
 - **Access is by membership, never by knowing a URL.** Session ids in URLs are
-  not secrets and are not access control.
+  not secrets and are not access control. **Invite tokens are the exception**:
+  `/join/<uuid>` is a bearer secret, and a different sensitivity class from a
+  session id. Never log one, put one in an error message, or include one in a
+  fixture.
+
+## Environments
+
+Local development runs Supabase in Docker via OrbStack. Production is a separate
+linked Supabase project, kept in step through `supabase/migrations/` — never by
+editing production directly.
+
+**`supabase db query --linked` runs SQL against production and bypasses RLS.**
+So does anything using `SUPABASE_SERVICE_ROLE_KEY`. Treat both as production
+access: not for exploration, not for "just checking", and never to work around a
+policy that is refusing you. If RLS is blocking a query, that is the system
+working — fix the policy in a migration.
 
 ## Tests
 

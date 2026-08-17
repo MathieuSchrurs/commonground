@@ -70,7 +70,13 @@ For any new file in `supabase/migrations/`:
 - **`MAX_FOLDER_DEPTH = 3`**, enforced as destination depth *plus subtree
   height* on a move — not just the destination's depth.
 - **Access is by membership.** A session id in a URL is not a secret and is not
-  access control.
+  access control. Invite tokens are the exception — `/join/<uuid>` is a bearer
+  secret. Flag any diff that logs one, returns one in an error, or commits one
+  in a fixture.
+- **Production access is not a debugging tool.** `supabase db query --linked`
+  and anything authenticated with `SUPABASE_SERVICE_ROLE_KEY` bypass RLS against
+  the live database. A diff that adds either to a script, a test, or a
+  development workflow is a violation.
 
 ## 6. Settled decisions
 
