@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { route } from './route';
-import { Invalid, NotFound } from './errors';
+import { Invalid, NotFound, Unauthorized } from './errors';
 
 const req = {} as never;
 const ctx = {} as never;
@@ -26,6 +26,14 @@ describe('route', () => {
     })(req, ctx);
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'session not found: s1' });
+  });
+
+  it('maps Unauthorized to 401', async () => {
+    const res = await route(async () => {
+      throw new Unauthorized();
+    })(req, ctx);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'Sign in required' });
   });
 
   it('maps unknown errors to 500 without leaking the message', async () => {
