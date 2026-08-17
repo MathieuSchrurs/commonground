@@ -1,41 +1,20 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { geocodeAddress } from '@/lib/mapbox';
+import { route } from '@/lib/session/route';
+import { Invalid, NotFound } from '@/lib/session/errors';
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { address } = body;
+export const POST = route(async (request) => {
+  const body = await request.json();
+  const { address } = body;
 
-    // Validate input
-    if (!address || typeof address !== 'string') {
-      return NextResponse.json(
-        { error: 'Address is required and must be a string' },
-        { status: 400 }
-      );
-    }
-
-    if (address.trim().length === 0) {
-      return NextResponse.json(
-        { error: 'Address cannot be empty' },
-        { status: 400 }
-      );
-    }
-
-    const result = await geocodeAddress(address.trim());
-
-    if (!result) {
-      return NextResponse.json(
-        { error: 'Address not found' },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error('Geocode API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to geocode address' },
-      { status: 500 }
-    );
+  if (!address || typeof address !== 'string' || address.trim().length === 0) {
+    throw new Invalid('Address is required and must be a non-empty string');
   }
-}
+
+  const result = await geocodeAddress(address.trim());
+
+  if (!result) {
+    throw new NotFound('address', address.trim());
+  }
+
+  return result;
+});
