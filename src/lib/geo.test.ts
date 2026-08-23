@@ -86,6 +86,11 @@ describe('calculateArea', () => {
     expect(area).toBeGreaterThan(60);
     expect(area).toBeLessThan(100);
   });
+
+  it('rounds to 2 decimal places', () => {
+    const area = calculateArea(square(3.7, 51.0, 0.1373));
+    expect(area).toBe(Math.round(area * 100) / 100);
+  });
 });
 
 describe('bufferPolygon', () => {
