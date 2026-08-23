@@ -1,0 +1,42 @@
+name: AI Build
+
+# Fires when an issue gets the `ready-for-agent` label and runs the /ai-build
+# orchestrator (.claude/commands/ai-build.md) against it end to end: plan,
+# implement, gate, review, draft PR. The label itself is the human gate — see
+# docs/agents/triage-labels.md.
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: ai-build-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  ai-build:
+    if: github.event.label.name == 'ready-for-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run /ai-build
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: "/ai-build ${{ github.event.issue.number }}"
