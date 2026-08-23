@@ -90,6 +90,9 @@ describe('calculateArea', () => {
   it('rounds to 2 decimal places', () => {
     const area = calculateArea(square(3.7, 51.0, 0.1373));
     expect(area).toBe(Math.round(area * 100) / 100);
+    // Pins the actual value so a stub that already returns a pre-rounded
+    // number (e.g. a hardcoded 0) can't satisfy the assertion above.
+    expect(area).toBeCloseTo(146.47, 2);
   });
 });
 
