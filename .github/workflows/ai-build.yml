@@ -8,14 +8,20 @@ name: AI Build
 on:
   issues:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to run /ai-build against (manual debug trigger)
+        type: string
+        required: true
 
 concurrency:
-  group: ai-build-${{ github.event.issue.number }}
+  group: ai-build-${{ github.event.issue.number || github.event.inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
   ai-build:
-    if: github.event.label.name == 'ready-for-agent'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready-for-agent'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -39,4 +45,5 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt: "/ai-build ${{ github.event.issue.number }}"
+          prompt: "/ai-build ${{ github.event.issue.number || github.event.inputs.issue_number }}"
+          show_full_output: true
