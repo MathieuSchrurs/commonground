@@ -47,3 +47,5 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: "/ai-build ${{ github.event.issue.number || github.event.inputs.issue_number }}"
           show_full_output: true
+          claude_args: |
+            --permission-mode bypassPermissions
