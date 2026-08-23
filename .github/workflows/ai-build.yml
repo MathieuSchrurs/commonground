@@ -49,4 +49,3 @@ jobs:
           show_full_output: true
           claude_args: |
             --permission-mode bypassPermissions
-            --model fable

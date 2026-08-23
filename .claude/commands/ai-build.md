@@ -58,15 +58,15 @@ Dispatch one `implementer` subagent per unit, **serially**, in dependency order.
 Not in parallel — worktree isolation isn't wired up yet and concurrent units
 would collide in the same tree.
 
-You (the orchestrator) run on a lighter model than the subagents you dispatch —
-that is deliberate, you hold the plan, they hold one unit's worth of code. Each
-`implementer` dispatch defaults to its own pinned model (sonnet). Override a
-single dispatch to opus only when the unit itself demands it: it touches
-several files whose invariants interact (e.g. the session store plus its
-callers), it requires reasoning across a large slice of the codebase to avoid
-breaking something non-local, or a prior sonnet attempt returned `NEEDS-SPEC`
-because the ambiguity was conceptual rather than missing detail. Do not
-escalate for length or tedium alone — those are exactly what sonnet is for.
+Each `implementer` dispatch defaults to its own pinned model (sonnet) regardless
+of what you (the orchestrator) run as — one unit's worth of code doesn't need
+your model's budget. Override a single dispatch to opus only when the unit
+itself demands it: it touches several files whose invariants interact (e.g. the
+session store plus its callers), it requires reasoning across a large slice of
+the codebase to avoid breaking something non-local, or a prior sonnet attempt
+returned `NEEDS-SPEC` because the ambiguity was conceptual rather than missing
+detail. Do not escalate for length or tedium alone — those are exactly what
+sonnet is for.
 
 Hand each one exactly its unit and nothing else. Collect every
 `STATUS/SEAM/TEST/TEETH/FILES/NOTICED` report verbatim; you need them for the PR.
