@@ -74,7 +74,7 @@ export function calculateArea(
   try {
     const area = turf.area(polygon);
     // Convert from square meters to square kilometers
-    return area / 1000000;
+    return Math.round((area / 1000000) * 100) / 100;
   } catch (error) {
     console.error('Error calculating area:', error);
     return 0;
