@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { parseCards, parsePrice } from './realo';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parseCards, parsePrice, scrapeRealo } from './realo';
+import { Area } from './areas';
+import * as common from './common';
+
+// Keep runWithConcurrency and dedupeById real (that's the seam under test —
+// scrapeRealo driving the shared pool), but fake scrapePaginated so we can
+// observe how many search-URL scrapes are in flight at once without real
+// network calls or real per-page delays.
+vi.mock('./common', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./common')>();
+  return {
+    ...actual,
+    scrapePaginated: vi.fn(),
+  };
+});
 
 describe('parsePrice', () => {
   it('parses Belgian dot-separated thousands', () => {
@@ -55,5 +69,51 @@ describe('parseCards', () => {
 
     const [listing] = parseCards(html);
     expect(listing.property_type).toBe('commercial');
+  });
+});
+
+describe('scrapeRealo', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('scrapes search URLs through the shared pool at a concurrency of 2', async () => {
+    let current = 0;
+    let max = 0;
+
+    const scrapePaginated = common.scrapePaginated as unknown as ReturnType<typeof vi.fn>;
+    scrapePaginated.mockImplementation(async () => {
+      current++;
+      max = Math.max(max, current);
+      await new Promise(r => setTimeout(r, 20));
+      current--;
+      return { listings: [], blocked: false };
+    });
+
+    // Each postal code resolves to a distinct search URL via Realo's
+    // suggest API, avoided here with a fake fetch keyed on the query.
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const pcMatch = url.match(/q=(\d+)/);
+      const pc = pcMatch ? pcMatch[1] : 'unknown';
+      return {
+        ok: true,
+        json: async () => ({
+          data: { suggestions: [{ forSaleUrl: `/en/search/for-sale/${pc}` }] },
+        }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const areas: Area[] = Array.from({ length: 5 }, (_, i) => ({
+      postalCode: `900${i}`,
+      city: `City${i}`,
+      citySlug: `city-${i}`,
+    }));
+
+    await scrapeRealo(areas, 1);
+
+    expect(max).toBe(2);
   });
 });

@@ -1,6 +1,6 @@
 import { PropertyListing } from './types';
 import { Area } from './areas';
-import { BROWSER_HEADERS, dedupeById, scrapePaginated } from './common';
+import { BROWSER_HEADERS, dedupeById, runWithConcurrency, scrapePaginated } from './common';
 
 // Use Realo's suggest API to get the proper search URL for a postal code
 async function getSearchUrl(postalCode: string): Promise<string | null> {
@@ -101,17 +101,20 @@ export async function scrapeRealo(
 
   const all: PropertyListing[] = [];
   let blocked = false;
-  for (const [searchUrl] of searchUrls) {
-    const result = await scrapePaginated({
+  const results = await runWithConcurrency(
+    [...searchUrls.keys()],
+    2,
+    async searchUrl => scrapePaginated({
       label: 'Realo',
       maxPages: maxPagesPerPostalCode,
       delayMs: 800,
       buildUrl: page => `${searchUrl}?page=${page}`,
       parse: parseCards,
-    });
+    })
+  );
+  for (const result of results) {
     all.push(...result.listings);
     blocked = blocked || result.blocked;
-    await new Promise(r => setTimeout(r, 600));
   }
 
   // Deduplicate across postal codes — adjacent searches return the same listings
