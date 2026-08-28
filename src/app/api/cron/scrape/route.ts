@@ -5,7 +5,7 @@ import { getServiceRoleClient } from '@/lib/supabase';
 import { getIsochrone } from '@/lib/mapbox';
 import { computeIntersection, bufferPolygon } from '@/lib/geo';
 import { refreshListingsForPolygon } from '@/scraper/refresh';
-import { fetchListingsInBbox } from '@/scraper/db';
+import { fetchNewListingsInBbox } from '@/scraper/db';
 
 // Scraping + geocoding for multiple sessions takes a while
 export const maxDuration = 300;
@@ -112,10 +112,8 @@ export async function GET(req: NextRequest) {
       // Count listings that appeared for the first time during this run and
       // sit inside the session's zone — the hook for future email alerts.
       const [minLng, minLat, maxLng, maxLat] = turf.bbox(searchZone);
-      const stored = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
-      const newListings = stored.filter(l =>
-        l.first_seen_at && l.first_seen_at >= runStartedAt &&
-        l.latitude && l.longitude &&
+      const newRows = await fetchNewListingsInBbox(minLng, minLat, maxLng, maxLat, runStartedAt);
+      const newListings = newRows.filter(l =>
         turf.booleanPointInPolygon(turf.point([l.longitude, l.latitude]), searchZone)
       );
 

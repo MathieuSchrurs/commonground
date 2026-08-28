@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fetchNewListingsInBbox, hasFreshListingsInBbox, roundIntegerFields, upsertListings } from './db';
 import { PropertyListing } from './types';
 
 const base: PropertyListing = {
@@ -7,43 +8,67 @@ const base: PropertyListing = {
   url: 'https://example.com/1',
 };
 
-const mockUpsert = vi.hoisted(() => vi.fn());
+// Records every chained call (method name + args) made against the Supabase
+// query builder, so tests can assert on the exact query shape without a real
+// database. Every chain method returns the same builder ("this"); the builder
+// is also thenable so `await supabase.from(...)...` resolves the same way the
+// real PostgREST client does.
+//
+// A builder that has had .upsert(rows) called on it resolves the way
+// PostgREST's `.upsert().select()` echo would: the upserted rows mapped back
+// with DB ids — capped at 1000 rows, the PostgREST response cap that makes an
+// unbounded upsert-then-select silently drop ids past it (and why
+// upsertListings chunks).
+interface RecordedCall {
+  method: string;
+  args: unknown[];
+}
 
-// Fakes PostgREST's hard cap of 1000 rows per response: a `.select()` after
-// `.upsert()` never returns more than 1000 rows, no matter how many rows were
-// written in that call. This is the behaviour that makes an unbounded
-// upsert-then-select silently drop ids for rows past the 1000th.
+let calls: RecordedCall[];
+let resolved: { data: unknown[]; error: null };
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
-    from: () => ({
-      // Existing-price lookup (source/external_id/price/...) — no rows on
-      // file, so every incoming listing is treated as a first sighting.
-      select: () => ({
-        eq: () => ({
-          in: () => Promise.resolve({ data: [], error: null }),
-        }),
-      }),
-      upsert: (rows: PropertyListing[]) => {
-        mockUpsert(rows);
-        return {
-          select: () =>
-            Promise.resolve({
-              data: rows.slice(0, 1000).map((r) => ({ ...r, id: `${r.source}:${r.external_id}` })),
+    from: (...args: unknown[]) => {
+      calls.push({ method: 'from', args });
+      const chainMethods = ['select', 'eq', 'gte', 'lte', 'limit', 'not', 'order', 'range', 'in', 'insert', 'delete'];
+      let upserted: Array<{ source: string; external_id: string }> | null = null;
+      const builder: Record<string, unknown> = {
+        upsert: (rows: Array<{ source: string; external_id: string }>) => {
+          calls.push({ method: 'upsert', args: [rows] });
+          upserted = rows;
+          return builder;
+        },
+        then: (resolve: (v: unknown) => void) => {
+          if (upserted !== null) {
+            resolve({
+              data: upserted
+                .slice(0, 1000)
+                .map((r) => ({ ...r, id: `${r.source}:${r.external_id}` })),
               error: null,
-            }),
+            });
+          } else {
+            resolve(resolved);
+          }
+        },
+      };
+      for (const method of chainMethods) {
+        builder[method] = (...methodArgs: unknown[]) => {
+          calls.push({ method, args: methodArgs });
+          return builder;
         };
-      },
-    }),
+      }
+      return builder;
+    },
   }),
 }));
 
-process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
-process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
-
-// Imported after the mock and env stubs above (vi.mock is hoisted above this
-// import by vitest; getClient() reads the env vars lazily, at call time, not
-// at import time, so setting them here is enough).
-import { roundIntegerFields, upsertListings } from './db';
+beforeEach(() => {
+  calls = [];
+  resolved = { data: [], error: null };
+  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
+  vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-key');
+});
 
 describe('roundIntegerFields', () => {
   it('rounds fractional prices to integers (BIGINT-safe)', () => {
@@ -76,9 +101,39 @@ describe('roundIntegerFields', () => {
   });
 });
 
+describe('hasFreshListingsInBbox', () => {
+  it('asks only for id, capped at one row, filtered by scraped_at >= cutoff', async () => {
+    const cutoff = '2026-08-01T00:00:00.000Z';
+    await hasFreshListingsInBbox(4.3, 50.8, 4.4, 50.9, cutoff);
+
+    expect(calls).toContainEqual({ method: 'from', args: ['property_listings'] });
+    expect(calls).toContainEqual({ method: 'select', args: ['id'] });
+    expect(calls).toContainEqual({ method: 'limit', args: [1] });
+    expect(calls).toContainEqual({ method: 'gte', args: ['scraped_at', cutoff] });
+  });
+
+  it('returns true when a row comes back, false when none does', async () => {
+    resolved = { data: [{ id: 'abc' }], error: null };
+    await expect(hasFreshListingsInBbox(4.3, 50.8, 4.4, 50.9, '2026-08-01T00:00:00.000Z')).resolves.toBe(true);
+
+    resolved = { data: [], error: null };
+    await expect(hasFreshListingsInBbox(4.3, 50.8, 4.4, 50.9, '2026-08-01T00:00:00.000Z')).resolves.toBe(false);
+  });
+});
+
+describe('fetchNewListingsInBbox', () => {
+  it('asks only for id/latitude/longitude, filtered by first_seen_at >= since', async () => {
+    const since = '2026-08-01T00:00:00.000Z';
+    await fetchNewListingsInBbox(4.3, 50.8, 4.4, 50.9, since);
+
+    expect(calls).toContainEqual({ method: 'from', args: ['property_listings'] });
+    expect(calls).toContainEqual({ method: 'select', args: ['id, latitude, longitude'] });
+    expect(calls).toContainEqual({ method: 'gte', args: ['first_seen_at', since] });
+  });
+});
+
 describe('upsertListings', () => {
   it('returns an id for every listing in a batch larger than the 1000-row PostgREST cap', async () => {
-    mockUpsert.mockClear();
     const listings: PropertyListing[] = Array.from({ length: 1200 }, (_, i) => ({
       source: 'realo',
       external_id: `ext-${i}`,
@@ -92,8 +147,8 @@ describe('upsertListings', () => {
       expect(returnedKeys.has(`${l.source}:${l.external_id}`)).toBe(true);
     }
 
-    // Proves chunking actually happened rather than the fake magically
-    // returning enough rows from a single oversized call.
-    expect(mockUpsert.mock.calls.length).toBeGreaterThan(1);
+    // Proves chunking actually happened rather than one oversized call
+    // satisfying every id.
+    expect(calls.filter((c) => c.method === 'upsert').length).toBeGreaterThan(1);
   });
 });

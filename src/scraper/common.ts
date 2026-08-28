@@ -96,6 +96,65 @@ async function fetchHtml(label: string, url: string, proxied = false): Promise<F
   return { html, blocked: false };
 }
 
+// Runs `items` through `worker` with at most `concurrency` calls in flight.
+// Results land at their original index regardless of completion order. If
+// `stopWhen` matches a completed result, no further items are dispatched, but
+// calls already in flight are left to resolve and are still included — this
+// is the "break on blocked" shape several per-source scrape loops use, made
+// reusable and concurrent instead of strictly sequential.
+// When `stopWhen` fires, items never dispatched leave a hole (`undefined`) at
+// their index rather than a placeholder — callers using `stopWhen` must guard
+// against that when iterating the result.
+export function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+  stopWhen?: (result: R) => boolean
+): Promise<R[]> {
+  return new Promise((resolve, reject) => {
+    const results: R[] = new Array(items.length);
+    let nextIndex = 0;
+    let inFlight = 0;
+    let stopped = false;
+    let settled = false;
+
+    const finishIfDone = () => {
+      if (settled) return;
+      if (inFlight === 0 && (stopped || nextIndex >= items.length)) {
+        settled = true;
+        resolve(results);
+      }
+    };
+
+    const launchNext = () => {
+      if (stopped || nextIndex >= items.length) return;
+      const index = nextIndex++;
+      inFlight++;
+      worker(items[index])
+        .then(result => {
+          results[index] = result;
+          inFlight--;
+          if (stopWhen && stopWhen(result)) stopped = true;
+          if (!stopped) launchNext();
+          finishIfDone();
+        })
+        .catch(err => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+    };
+
+    if (items.length === 0) {
+      resolve(results);
+      return;
+    }
+
+    for (let i = 0; i < Math.min(concurrency, items.length); i++) launchNext();
+  });
+}
+
 export interface PaginatedScrapeOptions {
   label: string;
   maxPages: number;
