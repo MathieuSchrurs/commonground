@@ -1,5 +1,6 @@
 import { route } from '@/lib/session/route';
 import { getSession, listUsers } from '@/lib/session/store';
+import { clampedSearchBufferPct } from '@/lib/session/mappers';
 import { getIsochrone } from '@/lib/mapbox';
 import { computeIntersectionResult } from '@/lib/intersection';
 import { fetchListingsInPolygon } from '@/scraper/db';
@@ -20,20 +21,18 @@ type Ctx = { params: Promise<{ id: string }> };
 // store's NotFound.
 export const GET = route(async (_req, { params }: Ctx) => {
   const { id } = await params;
-  const [session, users] = await Promise.all([getSession(id), listUsers(id)]);
+  const [session, participants] = await Promise.all([getSession(id), listUsers(id)]);
 
-  // Same clamp as the page's slider: the persisted buffer can never widen the
-  // search area beyond what the UI can express.
-  const bufferPct = Math.max(0, Math.min(15, session.search_buffer_pct ?? 0));
+  const bufferPct = clampedSearchBufferPct(session);
 
   const isochrones = (
     await Promise.all(
-      users.map((u) =>
+      participants.map((participant) =>
         getIsochrone({
-          lat: u.latitude,
-          lng: u.longitude,
-          minutes: u.maxMinutes,
-          mode: u.transportMode,
+          lat: participant.latitude,
+          lng: participant.longitude,
+          minutes: participant.maxMinutes,
+          mode: participant.transportMode,
         })
       )
     )
@@ -41,18 +40,15 @@ export const GET = route(async (_req, { params }: Ctx) => {
 
   const area = computeIntersectionResult(isochrones, bufferPct);
 
-  const { listings, stats } = area.bufferedIntersection
-    ? await fetchListingsInPolygon(area.bufferedIntersection)
-    : { listings: [], stats: null };
+  const listings = area.bufferedIntersection
+    ? (await fetchListingsInPolygon(area.bufferedIntersection)).listings
+    : [];
 
   return {
-    // The persisted search buffer, already clamped to the slider range — the
-    // raw sessions row (whose fields are snake_case) stays behind the store.
     bufferPct,
-    participants: users,
+    participants,
     isochrones,
     ...area,
     listings,
-    listingsStats: stats,
   };
 });

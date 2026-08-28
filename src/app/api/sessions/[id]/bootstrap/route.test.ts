@@ -66,16 +66,16 @@ beforeEach(() => {
     type: 'FeatureCollection',
     features: [feature('u1')],
   } as never);
+  mockedFetchListingsInPolygon.mockResolvedValue({
+    listings: [{ source: 'realo', external_id: '1', url: 'https://example.com/1', id: 'l1' }],
+    stats: { bboxListings: 1, insidePolygon: 1, mergedDuplicates: 0 },
+  });
   mockedComputeIntersectionResult.mockReturnValue({
     intersection: feature('strict'),
     areaKm2: 12.3,
     bufferedIntersection: feature('buffered'),
     bufferedAreaKm2: 18.4,
   } as never);
-  mockedFetchListingsInPolygon.mockResolvedValue({
-    listings: [{ source: 'realo', external_id: '1', url: 'https://example.com/1', id: 'l1' }],
-    stats: { bboxListings: 1, insidePolygon: 1, mergedDuplicates: 0 },
-  });
 });
 
 describe('GET /api/sessions/[id]/bootstrap', () => {
@@ -93,7 +93,6 @@ describe('GET /api/sessions/[id]/bootstrap', () => {
       bufferedIntersection: feature('buffered'),
       bufferedAreaKm2: 18.4,
       listings: [{ source: 'realo', external_id: '1', url: 'https://example.com/1', id: 'l1' }],
-      listingsStats: { bboxListings: 1, insidePolygon: 1, mergedDuplicates: 0 },
     });
 
     // The listings query runs against the area the page will actually draw:
@@ -131,7 +130,6 @@ describe('GET /api/sessions/[id]/bootstrap', () => {
     const body = await res.json();
 
     expect(body.listings).toEqual([]);
-    expect(body.listingsStats).toBeNull();
     expect(mockedFetchListingsInPolygon).not.toHaveBeenCalled();
   });
 

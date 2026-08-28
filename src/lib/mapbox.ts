@@ -112,7 +112,10 @@ export async function getIsochrone(
     // cold serverless instance (fresh deploy, scaled-out function) off the
     // Mapbox critical path entirely.
     const fromDb = await readIsochroneFromCache(key);
-    if (fromDb) return fromDb;
+    if (fromDb && fromDb.features && fromDb.features.length > 0) return fromDb;
+    // A stored body with no features is corrupt (writes are guarded, so this
+    // takes an out-of-band edit) — treat it as a miss and let the Mapbox
+    // fetch below overwrite it.
 
     const body = await fetchIsochrone(lat, lng, minutes, mode);
     // An empty response would poison every consumer downstream (the page

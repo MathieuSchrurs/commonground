@@ -182,6 +182,23 @@ describe('getIsochrone caching', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('treats a corrupt database row (no features) as a miss and refetches over it', async () => {
+    const { getIsochrone } = await import('./mapbox');
+
+    const params = { lat: 51.0, lng: 3.7, minutes: 10, mode: 'driving' as const };
+    vi.mocked(readIsochroneFromCache).mockResolvedValueOnce({
+      type: 'FeatureCollection',
+      features: [],
+    });
+
+    const body = await getIsochrone(params);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(body).toEqual(isochroneBody());
+    // The refetch overwrites the corrupt row.
+    expect(writeIsochroneToCache).toHaveBeenCalledWith('51:3.7:10:driving', body);
+  });
+
   it('rejects and persists nothing when Mapbox returns no features', async () => {
     const { getIsochrone } = await import('./mapbox');
 

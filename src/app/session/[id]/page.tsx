@@ -8,6 +8,7 @@ import { CommuteConstraint } from '@/types/user';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { createClient } from '@/utils/supabase/client';
 import { PropertyListing } from '@/scraper/types';
+import { IntersectionResult } from '@/lib/intersection';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import UserInputForm from '@/components/UserInputForm';
 import UserList from '@/components/UserList';
@@ -287,14 +288,10 @@ export default function SessionPage() {
           throw new Error('Failed to load session');
         }
 
-        const data = await response.json() as {
+        const data = await response.json() as IntersectionResult & {
           participants: CommuteConstraint[];
           bufferPct: number;
           isochrones: Feature<Polygon | MultiPolygon>[];
-          intersection: Feature<Polygon | MultiPolygon> | null;
-          areaKm2: number | null;
-          bufferedIntersection: Feature<Polygon | MultiPolygon> | null;
-          bufferedAreaKm2: number | null;
           listings: PropertyListing[];
         };
         setUsers(data.participants);
