@@ -8,6 +8,9 @@ export interface Participant {
   id: string;
   name: string;
   householdId?: string | null;
+  // Whether commercial listings are hidden from this participant. See
+  // docs/adr/0004. Undefined is treated as hidden, matching the DB default.
+  hideCommercial?: boolean;
 }
 
 // Where one household stands on one listing. A split household is an
@@ -138,12 +141,22 @@ export function computeConvergence({
       };
     });
 
+    // A household in which every member hides commercial listings can never
+    // react to one, so it is permanently silent on every commercial listing.
+    // Left in, it would wrongly and permanently block that listing from ever
+    // reaching unanimous — so for commercial listings only, such a household
+    // is excluded from the unanimous check entirely (see docs/adr/0004).
+    const unanimousStandings =
+      listing.property_type === 'commercial'
+        ? standings.filter((_, i) => units[i].members.some((m) => (m.hideCommercial ?? true) === false))
+        : standings;
+
     const entry: ListingConvergence = {
       listing,
       standings,
       yesCount: standings.filter((s) => s.position === 'yes').length,
       // A lone household agreeing with itself is not the group agreeing.
-      unanimous: standings.length > 1 && standings.every((s) => s.position === 'yes'),
+      unanimous: unanimousStandings.length > 1 && unanimousStandings.every((s) => s.position === 'yes'),
     };
 
     engaged.push(entry);

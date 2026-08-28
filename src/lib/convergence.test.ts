@@ -3,12 +3,13 @@ import { computeConvergence, listingsAwaiting, Convergence } from './convergence
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 
-function listing(id: string): PropertyListing {
+function listing(id: string, propertyType?: PropertyListing['property_type']): PropertyListing {
   return {
     id,
     source: 'realo',
     external_id: id,
     url: `https://example.com/${id}`,
+    ...(propertyType ? { property_type: propertyType } : {}),
   } as PropertyListing;
 }
 
@@ -173,6 +174,82 @@ describe('computeConvergence', () => {
       ],
     });
     expect(oneSilent.favorites[0].unanimous).toBe(false);
+  });
+
+  it('excludes a household that hides commercial listings from unanimous on a commercial listing', () => {
+    // h3 (Eva & Finn) hides commercial listings entirely and so can never
+    // react to one — it must not be the reason a commercial listing can
+    // never reach unanimous. h1 and h2 see commercial listings, hence their
+    // reactions below.
+    const hidingParticipants = participants.map((p) => ({
+      ...p,
+      hideCommercial: p.householdId === 'h3',
+    }));
+
+    const result = computeConvergence({
+      listings: [listing('a', 'commercial')],
+      reactions: [
+        reaction('a', 'u1', 'love'),
+        reaction('a', 'u2', 'love'),
+        reaction('a', 'u3', 'love'),
+        reaction('a', 'u4', 'love'),
+        // h3 never reacts — hidden from them
+      ],
+      participants: hidingParticipants,
+      households,
+    });
+
+    expect(result.favorites[0].unanimous).toBe(true);
+  });
+
+  it('still blocks unanimous on a commercial listing when a silent household has a member who does not hide commercial listings', () => {
+    // h3 has one member who has not hidden commercial listings, so their
+    // silence is a real silence, not an artifact of the filter — ordinary
+    // rules apply.
+    const mixedParticipants = participants.map((p) => {
+      if (p.id === 'u5') return { ...p, hideCommercial: true };
+      if (p.id === 'u6') return { ...p, hideCommercial: false };
+      // h1 and h2 see commercial listings, hence their reactions below.
+      return { ...p, hideCommercial: false };
+    });
+
+    const result = computeConvergence({
+      listings: [listing('a', 'commercial')],
+      reactions: [
+        reaction('a', 'u1', 'love'),
+        reaction('a', 'u2', 'love'),
+        reaction('a', 'u3', 'love'),
+        reaction('a', 'u4', 'love'),
+        // h3 never reacts, and Finn (u6) can see commercial listings
+      ],
+      participants: mixedParticipants,
+      households,
+    });
+
+    expect(result.favorites[0].unanimous).toBe(false);
+  });
+
+  it('still blocks unanimous on a non-commercial listing even when the silent household hides commercial listings', () => {
+    // The exclusion is commercial-specific — hiding commercial listings says
+    // nothing about a household's silence on an ordinary listing.
+    const hidingParticipants = participants.map((p) =>
+      p.householdId === 'h3' ? { ...p, hideCommercial: true } : p,
+    );
+
+    const result = computeConvergence({
+      listings: [listing('a')],
+      reactions: [
+        reaction('a', 'u1', 'love'),
+        reaction('a', 'u2', 'love'),
+        reaction('a', 'u3', 'love'),
+        reaction('a', 'u4', 'love'),
+        // h3 never reacts
+      ],
+      participants: hidingParticipants,
+      households,
+    });
+
+    expect(result.favorites[0].unanimous).toBe(false);
   });
 
   it('ranks contested listings by closeness to consensus', () => {
