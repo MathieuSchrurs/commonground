@@ -193,3 +193,74 @@ describe('SessionPage — isochrone updates arrive via broadcast, not client ref
     expect(isochrones[1]?.properties?.marker).toBe('initial');
   });
 });
+
+describe('SessionPage — toggling a reaction does not double-fetch reactions', () => {
+  it('refetches reactions once for the realtime echo, not once for the toggle plus once for the echo', async () => {
+    let reactionsFetchCount = 0;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: { method?: string }) => {
+        if (url.endsWith('/me')) {
+          return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
+        }
+        if (url === `/api/sessions/${SESSION_ID}`) {
+          return { ok: true, json: async () => ({ users: [USER_1], session: {} }) };
+        }
+        if (url === `/api/sessions/${SESSION_ID}/households`) {
+          return { ok: true, json: async () => ({ households: [] }) };
+        }
+        if (url === `/api/sessions/${SESSION_ID}/reactions`) {
+          if (options?.method === 'POST') {
+            return { ok: true, json: async () => ({}) };
+          }
+          reactionsFetchCount += 1;
+          return { ok: true, json: async () => ({ reactions: [] }) };
+        }
+        if (url === '/api/isochrone') {
+          return { ok: true, json: async () => minimalFeatureCollection('initial') };
+        }
+        if (url === '/api/intersection') {
+          return { ok: true, json: async () => ({}) };
+        }
+        return { ok: true, json: async () => ({}) };
+      })
+    );
+
+    render(<SessionPage />);
+
+    // Initial mount triggers loadReactions() once, independently of the
+    // toggle under test.
+    await waitFor(() => {
+      expect(reactionsFetchCount).toBe(1);
+    });
+
+    // "Who am I" must have resolved before a toggle is possible.
+    await waitFor(() => {
+      expect(mapProps.current?.myUserId).toBe('me');
+    });
+
+    expect(mapProps.current?.onToggleReaction).toBeDefined();
+
+    await (mapProps.current!.onToggleReaction as (
+      listingId: string,
+      reaction: string
+    ) => Promise<void>)('listing-1', 'love');
+
+    const channel = channelRegistry[`reactions_${SESSION_ID}`];
+    expect(channel?.postgresChanges).toBeDefined();
+
+    // Simulate the realtime echo of the toggle's own write arriving.
+    await channel.postgresChanges!({ eventType: 'UPDATE' });
+
+    await waitFor(() => {
+      expect(reactionsFetchCount).toBe(2);
+    });
+
+    // Give any stray in-flight fetch time to land — this is what catches a
+    // direct loadReactions() call from the toggle handler racing the echo
+    // and pushing the count to 3.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(reactionsFetchCount).toBe(2);
+  });
+});

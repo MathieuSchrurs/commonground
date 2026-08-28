@@ -190,16 +190,19 @@ export default function SessionPage() {
   const handleToggleReaction = useCallback(async (listingId: string, reaction: ReactionKind) => {
     if (!myUserId) return;
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/reactions`, {
+      await fetch(`/api/sessions/${sessionId}/reactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ listingId, userId: myUserId, reaction }),
       });
-      if (res.ok) loadReactions();
+      // Don't refetch here — the write lands in listing_reactions, and the
+      // realtime subscription above echoes it back, which refetches once.
+      // Calling loadReactions() here too raced that echo and doubled the
+      // fetch for a single toggle.
     } catch {
       // Realtime will reconcile on the next event
     }
-  }, [sessionId, myUserId, loadReactions]);
+  }, [sessionId, myUserId]);
 
   // Fetch isochrone for a user
   const fetchIsochrone = useCallback(async (user: CommuteConstraint) => {
