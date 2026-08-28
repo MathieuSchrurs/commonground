@@ -9,3 +9,22 @@ export function isListingVisible(listing: PropertyListing, hideCommercial: boole
   if (hideCommercial && listing.property_type === 'commercial') return false;
   return true;
 }
+
+/**
+ * Shared source/price/commercial predicate used both to compute the
+ * filtered count/list (`matchesFilters`) and to set marker opacity on
+ * already-rendered Mapbox markers — kept as one function so the two stay
+ * in sync.
+ */
+export function passesListingFilters(
+  listing: PropertyListing,
+  sourceFilter: Record<string, boolean>,
+  priceRange: [number, number] | null,
+  hideCommercial: boolean
+): boolean {
+  if (sourceFilter[listing.source] === false) return false;
+  if (listing.price != null && priceRange) {
+    if (listing.price < priceRange[0] || listing.price > priceRange[1]) return false;
+  }
+  return isListingVisible(listing, hideCommercial);
+}

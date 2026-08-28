@@ -6,6 +6,7 @@ import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 import { CommuteConstraint } from '@/types/user';
 import { computeConvergence, Household } from '@/lib/convergence';
+import { isListingVisible } from '@/lib/listings';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import HouseholdStandings from '@/components/dashboard/HouseholdStandings';
@@ -15,6 +16,8 @@ interface ShortlistPanelProps {
   reactions: ListingReaction[];
   users: CommuteConstraint[];
   households?: Household[];
+  /** session_user id of the person at this browser; null until they pick */
+  myUserId?: string | null;
 }
 
 function formatPrice(price?: number): string {
@@ -30,10 +33,19 @@ export default function ShortlistPanel({
   reactions,
   users,
   households = [],
+  myUserId = null,
 }: ShortlistPanelProps) {
+  // Defaults to hidden (matches the DB default on session_users) when the
+  // viewer's own hideCommercial isn't set — see docs/adr/0004.
+  const hideCommercial = useMemo(
+    () => users.find((u) => u.id === myUserId)?.hideCommercial ?? true,
+    [users, myUserId]
+  );
+
   const shortlist = useMemo(() => {
+    const visibleProperties = properties.filter((p) => isListingVisible(p, hideCommercial));
     const { considered, contested } = computeConvergence({
-      listings: properties,
+      listings: visibleProperties,
       reactions,
       participants: users,
       households,
@@ -42,7 +54,7 @@ export default function ShortlistPanel({
     // house the group is still warming to must not vanish off the map.
     const arguing = new Set(contested.map((e) => e.listing.id));
     return considered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
-  }, [properties, reactions, users, households]);
+  }, [properties, reactions, users, households, hideCommercial]);
 
   if (shortlist.length === 0) return null;
 

@@ -8,6 +8,7 @@ import { SharedFile, Folder } from '@/types/files';
 import { MeetingItem, Todo } from '@/types/todos';
 import { Decision } from '@/types/decisions';
 import { Convergence } from '@/lib/convergence';
+import { isListingVisible } from '@/lib/listings';
 import SessionHeader from '@/components/SessionHeader';
 import NextMeetingCard from '@/components/dashboard/NextMeetingCard';
 import GroupFavoritesCard from '@/components/dashboard/GroupFavoritesCard';
@@ -45,6 +46,7 @@ export default function DashboardPage() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [myHouseholdId, setMyHouseholdId] = useState<string | null>(null);
+  const [myHideCommercial, setMyHideCommercial] = useState<boolean>(true);
 
   // "Who am I" is the participant linked to the signed-in account. Re-read
   // whenever pairing changes: being put into a household changes which unit id
@@ -58,6 +60,9 @@ export default function DashboardPage() {
       // Unpaired, they are a household of one keyed by their own id — which is
       // exactly the unit id convergence builds for them.
       setMyHouseholdId(me ? me.householdId ?? me.id : null);
+      // Defaults to hidden (matches the DB default on session_users) when the
+      // viewer's own hideCommercial isn't set — see docs/adr/0004.
+      setMyHideCommercial(me?.hideCommercial ?? true);
     } catch {
       // Non-fatal: the personal slot stays as it was
     }
@@ -269,8 +274,12 @@ export default function DashboardPage() {
             myUserId={myUserId}
             onChanged={loadTodos}
           />
-          <GroupFavoritesCard favorites={convergence.favorites} />
-          <SplitVotesCard contested={convergence.contested} />
+          <GroupFavoritesCard
+            favorites={convergence.favorites.filter((f) => isListingVisible(f.listing, myHideCommercial))}
+          />
+          <SplitVotesCard
+            contested={convergence.contested.filter((c) => isListingVisible(c.listing, myHideCommercial))}
+          />
         </div>
 
         {/* Shared files on the left, decisions on the right, stretched to
