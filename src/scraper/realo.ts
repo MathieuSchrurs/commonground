@@ -60,6 +60,7 @@ export function parseCards(html: string): PropertyListing[] {
     let property_type: PropertyListing['property_type'] = 'other';
     if (/apartment|flat|studio/i.test(typeHint + card.slice(0, 300))) property_type = 'apartment';
     else if (/house|villa|bungalow/i.test(typeHint + card.slice(0, 300))) property_type = 'house';
+    else if (/office|retail|industrial|commercial/i.test(typeHint + card.slice(0, 300))) property_type = 'commercial';
 
     return [{
       source: 'realo' as const,

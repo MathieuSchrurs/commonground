@@ -24,7 +24,7 @@ export const BROWSER_HEADERS = {
 const MIN_HTML_LENGTH = 5000;
 
 // Map a site-specific type string ("VILLA", "ground-floor", "building-plot",
-// "Huis", …) onto our four buckets, covering both English and Dutch site
+// "Huis", …) onto our five buckets, covering both English and Dutch site
 // vocabularies. Apartment keywords are checked first because "ground-floor"
 // would otherwise match the land keyword "ground".
 export function mapPropertyType(raw?: string): PropertyListing['property_type'] {
@@ -32,6 +32,7 @@ export function mapPropertyType(raw?: string): PropertyListing['property_type'] 
   if (/apartment|appartement|studio|flat|penthouse|ground-floor|duplex|triplex|loft/.test(t)) return 'apartment';
   if (/land|plot|ground|grond/.test(t)) return 'land';
   if (/house|huis|woning|villa|bungalow|cottage|farm|hoeve|chalet|mansion|castle|kasteel|residence/.test(t)) return 'house';
+  if (/office|kantoor|retail|winkel|shop|industrial|industrie|bedrijfsruimte|commercial/.test(t)) return 'commercial';
   return 'other';
 }
 
