@@ -78,6 +78,16 @@ export function createFakeSupabaseClient(options?: {
     }
     chain.single = (...args: unknown[]) => {
       record.calls.push({ method: 'single', args });
+      // Real Supabase: .single() on zero rows resolves { data: null, error:
+      // PGRST116 }, not a bare null — unlike .maybeSingle(), which treats no
+      // row as a clean success. A fixture that hands back null data with no
+      // error would let a test believe .single() succeeded on nothing.
+      if (tableResult.data === null && tableResult.error === null) {
+        return Promise.resolve({
+          data: null,
+          error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+        });
+      }
       return Promise.resolve(tableResult);
     };
     chain.maybeSingle = (...args: unknown[]) => {
