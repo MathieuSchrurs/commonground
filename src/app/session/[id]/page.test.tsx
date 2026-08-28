@@ -44,16 +44,23 @@ vi.mock('@/components/SessionHeader', () => ({ default: () => null }));
 vi.mock('@/components/UserInputForm', () => ({ default: () => null }));
 vi.mock('@/components/UserList', () => ({ default: () => null }));
 vi.mock('@/components/ShortlistPanel', () => ({ default: () => null }));
-vi.mock('@/components/HouseholdsCard', () => ({ default: () => null }));
 vi.mock('@/components/ZoneLegend', () => ({ default: () => null }));
 
-const { mapProps } = vi.hoisted(() => ({
+const { mapProps, householdsCardProps } = vi.hoisted(() => ({
   mapProps: { current: null as null | Record<string, unknown> },
+  householdsCardProps: { current: null as null | Record<string, unknown> },
 }));
 
 vi.mock('@/components/Map', () => ({
   default: (props: Record<string, unknown>) => {
     mapProps.current = props;
+    return null;
+  },
+}));
+
+vi.mock('@/components/HouseholdsCard', () => ({
+  default: (props: Record<string, unknown>) => {
+    householdsCardProps.current = props;
     return null;
   },
 }));
@@ -96,6 +103,7 @@ function minimalFeatureCollection(marker: string) {
 beforeEach(async () => {
   for (const key of Object.keys(channelRegistry)) delete channelRegistry[key];
   mapProps.current = null;
+  householdsCardProps.current = null;
   // The page snapshots the previous visit from localStorage in a mount
   // effect; this jsdom environment doesn't expose it, so stub the surface
   // the page uses.
@@ -262,5 +270,63 @@ describe('SessionPage — toggling a reaction does not double-fetch reactions', 
     // and pushing the count to 3.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(reactionsFetchCount).toBe(2);
+  });
+});
+
+describe('SessionPage — loading households and users runs concurrently', () => {
+  it('has the households fetch and the session fetch in flight at the same time', async () => {
+    const HOUSEHOLDS_URL = `/api/sessions/${SESSION_ID}/households`;
+    const SESSION_URL = `/api/sessions/${SESSION_ID}`;
+    const inFlight = new Set<string>();
+    let overlapObserved = false;
+
+    async function trackOverlap(url: string, other: string, respond: () => unknown) {
+      inFlight.add(url);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (inFlight.has(other)) overlapObserved = true;
+      inFlight.delete(url);
+      return { ok: true, json: async () => respond() };
+    }
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/me')) {
+          return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
+        }
+        if (url === HOUSEHOLDS_URL) {
+          return trackOverlap(HOUSEHOLDS_URL, SESSION_URL, () => ({ households: [] }));
+        }
+        if (url === SESSION_URL) {
+          return trackOverlap(SESSION_URL, HOUSEHOLDS_URL, () => ({ users: [USER_1], session: {} }));
+        }
+        if (url === '/api/isochrone') {
+          return { ok: true, json: async () => minimalFeatureCollection('initial') };
+        }
+        if (url === '/api/intersection') {
+          return { ok: true, json: async () => ({}) };
+        }
+        return { ok: true, json: async () => ({}) };
+      })
+    );
+
+    render(<SessionPage />);
+
+    await waitFor(() => {
+      expect(mapProps.current?.isochrones).toBeDefined();
+    });
+    expect(householdsCardProps.current?.onChanged).toBeDefined();
+
+    // Let the mount-time fetches (which fire from independent effects and so
+    // overlap regardless of this unit's fix) fully drain before measuring —
+    // the assertion below must be about the two fetches triggered together
+    // from a single loadUsersAndHouseholds() call, not about unrelated
+    // effects that happened to race each other on mount.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    overlapObserved = false;
+
+    await (householdsCardProps.current!.onChanged as () => Promise<void>)();
+
+    expect(overlapObserved).toBe(true);
   });
 });

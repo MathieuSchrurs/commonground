@@ -146,8 +146,12 @@ export default function SessionPage() {
   }, [sessionId]);
 
   const loadUsersAndHouseholds = useCallback(async () => {
-    await loadHouseholds();
-    const res = await fetch(`/api/sessions/${sessionId}`);
+    // loadHouseholds() and this fetch are independent — running them
+    // concurrently avoids paying for both round trips in sequence.
+    const [, res] = await Promise.all([
+      loadHouseholds(),
+      fetch(`/api/sessions/${sessionId}`),
+    ]);
     if (!res.ok) return;
     const { users: fresh } = (await res.json()) as { users: CommuteConstraint[] };
     // globalThis.Map — `Map` in this module is the map component.
