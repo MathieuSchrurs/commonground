@@ -1,5 +1,6 @@
 import * as turf from '@turf/turf';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 export interface Area {
   postalCode: string;
@@ -51,7 +52,7 @@ export async function discoverAreas(
   const results = await Promise.all(
     candidates.map(async ([lng, lat]): Promise<Area | null> => {
       const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?types=postcode&country=BE&limit=1&access_token=${mapboxToken}`;
-      const res = await fetch(url).catch(() => null);
+      const res = await fetchWithTimeout(url, undefined, API_FETCH_TIMEOUT_MS).catch(() => null);
       if (!res?.ok) return null;
       const data = await res.json();
       const feature = data.features?.[0];
