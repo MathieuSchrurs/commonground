@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { dedupeById, mapPropertyType, runWithConcurrency } from './common';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { dedupeById, mapPropertyType, runWithConcurrency, scrapePaginated } from './common';
 import { PropertyListing } from './types';
+import { DIRECT_FETCH_TIMEOUT_MS, fetchWithTimeout, PROXIED_FETCH_TIMEOUT_MS } from '../lib/http';
+
+vi.mock('../lib/http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/http')>();
+  return {
+    ...actual,
+    fetchWithTimeout: vi.fn(),
+  };
+});
 
 // A controllable promise: the test decides exactly when it settles, so we can
 // assert what's in-flight at a given instant without racing real timers.
@@ -165,5 +174,46 @@ describe('runWithConcurrency', () => {
     expect(results[1]).toBe(1);
     expect(results.length).toBe(6);
     expect(2 in results).toBe(false);
+  });
+});
+
+describe('scrapePaginated fetch timeouts', () => {
+  const mockResponse = {
+    ok: true,
+    status: 200,
+    text: () => Promise.resolve('x'.repeat(6000)),
+  } as unknown as Response;
+
+  const baseOpts = {
+    label: 'test-source',
+    maxPages: 1,
+    delayMs: 0,
+    buildUrl: (page: number) => `https://example.com/page/${page}`,
+    parse: () => [] as PropertyListing[],
+  };
+
+  beforeEach(() => {
+    vi.mocked(fetchWithTimeout).mockClear();
+    vi.mocked(fetchWithTimeout).mockResolvedValue(mockResponse);
+  });
+
+  it('uses the proxied timeout when proxied is true', async () => {
+    await scrapePaginated({ ...baseOpts, proxied: true });
+
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      PROXIED_FETCH_TIMEOUT_MS
+    );
+  });
+
+  it('uses the direct timeout when proxied is false', async () => {
+    await scrapePaginated({ ...baseOpts, proxied: false });
+
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      DIRECT_FETCH_TIMEOUT_MS
+    );
   });
 });

@@ -1,5 +1,6 @@
 import { PropertyListing } from './types';
 import { buildProxiedUrl } from './proxy-fetch';
+import { DIRECT_FETCH_TIMEOUT_MS, fetchWithTimeout, PROXIED_FETCH_TIMEOUT_MS } from '../lib/http';
 
 // Headers that closely mimic a real Chrome browser on macOS. Shared by all
 // scrapers so anti-bot fixes land everywhere at once.
@@ -63,9 +64,11 @@ async function fetchHtml(label: string, url: string, proxied = false): Promise<F
   const fetchUrl = proxiedUrl ?? url;
   const init: RequestInit = proxiedUrl ? {} : { headers: BROWSER_HEADERS };
 
+  const timeoutMs = proxied ? PROXIED_FETCH_TIMEOUT_MS : DIRECT_FETCH_TIMEOUT_MS;
+
   let res: Response;
   try {
-    res = await fetch(fetchUrl, init);
+    res = await fetchWithTimeout(fetchUrl, init, timeoutMs);
   } catch (err) {
     console.error(`[${label}] Network error:`, err);
     return { html: null, blocked: false };

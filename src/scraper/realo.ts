@@ -1,13 +1,16 @@
 import { PropertyListing } from './types';
 import { Area } from './areas';
 import { BROWSER_HEADERS, dedupeById, runWithConcurrency, scrapePaginated } from './common';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 // Use Realo's suggest API to get the proper search URL for a postal code
 async function getSearchUrl(postalCode: string): Promise<string | null> {
   const url = `https://www.realo.be/en/search/suggest.json?q=${postalCode}&transaction=for-sale`;
-  const res = await fetch(url, {
-    headers: { ...BROWSER_HEADERS, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-  }).catch(() => null);
+  const res = await fetchWithTimeout(
+    url,
+    { headers: { ...BROWSER_HEADERS, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } },
+    API_FETCH_TIMEOUT_MS
+  ).catch(() => null);
   if (!res?.ok) return null;
 
   const data = await res.json();

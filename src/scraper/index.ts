@@ -22,6 +22,7 @@ import { scrapeRealo } from './realo';
 import { upsertListings } from './db';
 import { Area, slugifyCity } from './areas';
 import { geocodeAddress } from './geocode';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 // Resolve a postal code to its municipality name via Mapbox, so the
 // town-filtered scrapers (Immovlan, ImmoScoop) know what to ask for.
@@ -31,7 +32,7 @@ async function toArea(postalCode: string): Promise<Area> {
   if (geo) {
     const token = process.env.MAPBOX_SECRET_TOKEN;
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${geo.longitude},${geo.latitude}.json?types=place&country=BE&limit=1&access_token=${token}`;
-    const res = await fetch(url).catch(() => null);
+    const res = await fetchWithTimeout(url, undefined, API_FETCH_TIMEOUT_MS).catch(() => null);
     if (res?.ok) {
       const data = await res.json();
       city = (data.features?.[0]?.text as string) ?? '';

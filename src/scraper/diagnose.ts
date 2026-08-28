@@ -21,6 +21,7 @@ import { scrapeRealo } from './realo';
 import { discoverAreas } from './areas';
 import { BROWSER_HEADERS } from './common';
 import { PropertyListing } from './types';
+import { DIRECT_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 // Gent and surroundings
 const BBOX: [number, number, number, number] = [3.5, 50.95, 3.9, 51.15];
@@ -43,7 +44,11 @@ const DEAD_MARKERS = [
 
 async function checkUrl(url: string): Promise<string> {
   try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
+    const res = await fetchWithTimeout(
+      url,
+      { headers: BROWSER_HEADERS, redirect: 'follow' },
+      DIRECT_FETCH_TIMEOUT_MS
+    );
     if (!res.ok) return `HTTP ${res.status}`;
     const html = await res.text();
     if (html.length < 5000) return 'SHORT (block/captcha?)';

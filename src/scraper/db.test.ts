@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchNewListingsInBbox, hasFreshListingsInBbox, roundIntegerFields } from './db';
+import { fetchNewListingsInBbox, hasFreshListingsInBbox, roundIntegerFields, upsertListings } from './db';
 import { PropertyListing } from './types';
 
 const base: PropertyListing = {
@@ -10,9 +10,15 @@ const base: PropertyListing = {
 
 // Records every chained call (method name + args) made against the Supabase
 // query builder, so tests can assert on the exact query shape without a real
-// database. Every chain method returns the same builder ("this"); the
-// builder is also thenable so `await supabase.from(...)...` resolves the
-// same way the real PostgREST client does.
+// database. Every chain method returns the same builder ("this"); the builder
+// is also thenable so `await supabase.from(...)...` resolves the same way the
+// real PostgREST client does.
+//
+// A builder that has had .upsert(rows) called on it resolves the way
+// PostgREST's `.upsert().select()` echo would: the upserted rows mapped back
+// with DB ids — capped at 1000 rows, the PostgREST response cap that makes an
+// unbounded upsert-then-select silently drop ids past it (and why
+// upsertListings chunks).
 interface RecordedCall {
   method: string;
   args: unknown[];
@@ -25,9 +31,26 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     from: (...args: unknown[]) => {
       calls.push({ method: 'from', args });
-      const chainMethods = ['select', 'eq', 'gte', 'lte', 'limit', 'not', 'order', 'range', 'in'];
+      const chainMethods = ['select', 'eq', 'gte', 'lte', 'limit', 'not', 'order', 'range', 'in', 'insert', 'delete'];
+      let upserted: Array<{ source: string; external_id: string }> | null = null;
       const builder: Record<string, unknown> = {
-        then: (resolve: (v: unknown) => void) => resolve(resolved),
+        upsert: (rows: Array<{ source: string; external_id: string }>) => {
+          calls.push({ method: 'upsert', args: [rows] });
+          upserted = rows;
+          return builder;
+        },
+        then: (resolve: (v: unknown) => void) => {
+          if (upserted !== null) {
+            resolve({
+              data: upserted
+                .slice(0, 1000)
+                .map((r) => ({ ...r, id: `${r.source}:${r.external_id}` })),
+              error: null,
+            });
+          } else {
+            resolve(resolved);
+          }
+        },
       };
       for (const method of chainMethods) {
         builder[method] = (...methodArgs: unknown[]) => {
@@ -43,7 +66,7 @@ vi.mock('@supabase/supabase-js', () => ({
 beforeEach(() => {
   calls = [];
   resolved = { data: [], error: null };
-  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
+  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-key');
 });
 
@@ -106,5 +129,26 @@ describe('fetchNewListingsInBbox', () => {
     expect(calls).toContainEqual({ method: 'from', args: ['property_listings'] });
     expect(calls).toContainEqual({ method: 'select', args: ['id, latitude, longitude'] });
     expect(calls).toContainEqual({ method: 'gte', args: ['first_seen_at', since] });
+  });
+});
+
+describe('upsertListings', () => {
+  it('returns an id for every listing in a batch larger than the 1000-row PostgREST cap', async () => {
+    const listings: PropertyListing[] = Array.from({ length: 1200 }, (_, i) => ({
+      source: 'realo',
+      external_id: `ext-${i}`,
+      url: `https://example.com/${i}`,
+    }));
+
+    const result = await upsertListings(listings);
+
+    const returnedKeys = new Set(result.map((r) => `${r.source}:${r.external_id}`));
+    for (const l of listings) {
+      expect(returnedKeys.has(`${l.source}:${l.external_id}`)).toBe(true);
+    }
+
+    // Proves chunking actually happened rather than one oversized call
+    // satisfying every id.
+    expect(calls.filter((c) => c.method === 'upsert').length).toBeGreaterThan(1);
   });
 });

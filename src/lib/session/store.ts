@@ -16,7 +16,6 @@ import { depthOf, MAX_FOLDER_DEPTH } from '@/lib/folders';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
-import { resolveToggle } from './reactions';
 import { SessionUserRow, toCommuteConstraint } from './mappers';
 
 const REACTION_KINDS: ReactionKind[] = ['love', 'object'];
@@ -54,59 +53,34 @@ export async function getSession(id: string): Promise<SessionRow> {
   return data as unknown as SessionRow;
 }
 
-type MemberRow = { session_id: string; account_id: string; role: string };
+// A row returned by the list_sessions_for_account RPC.
+type SessionForAccountRow = {
+  id: string;
+  name: string | null;
+  updated_at: string | null;
+  role: string;
+  members: { id: string; name: string | null }[];
+};
 
 // Every session an account belongs to (created or was added to), newest activity
-// first, each with its members for avatars/labels.
+// first, each with its members for avatars/labels. One round trip via the
+// list_sessions_for_account RPC — see its migration for why this used to be
+// three sequential queries.
 export async function listSessionsForAccount(accountId: string): Promise<SessionSummary[]> {
   const db = await createClient();
+  const { data, error } = await db.rpc('list_sessions_for_account', {
+    p_account_id: accountId,
+  } as never);
+  if (error) throw error;
 
-  const { data: mine, error: mineErr } = await db
-    .from('session_members')
-    .select('session_id, role')
-    .eq('account_id', accountId);
-  if (mineErr) throw mineErr;
-  const ids = ((mine ?? []) as { session_id: string; role: string }[]).map((m) => m.session_id);
-  if (ids.length === 0) return [];
-  const roleBySession = new Map(
-    ((mine ?? []) as { session_id: string; role: string }[]).map((m) => [m.session_id, m.role]),
-  );
-
-  const [{ data: sessions, error: sErr }, { data: members, error: memErr }] = await Promise.all([
-    db.from('sessions').select('id, name, updated_at').in('id', ids),
-    db.from('session_members').select('session_id, account_id, role').in('session_id', ids),
-  ]);
-  if (sErr) throw sErr;
-  if (memErr) throw memErr;
-
-  const memberRows = (members ?? []) as unknown as MemberRow[];
-  const accountIds = [...new Set(memberRows.map((m) => m.account_id))];
-  const { data: profiles, error: pErr } = await db
-    .from('profiles')
-    .select('id, display_name')
-    .in('id', accountIds);
-  if (pErr) throw pErr;
-  const nameByAccount = new Map(
-    ((profiles ?? []) as { id: string; display_name: string | null }[]).map((p) => [
-      p.id,
-      p.display_name,
-    ]),
-  );
-
-  const membersBySession = new Map<string, { id: string; name: string | null }[]>();
-  for (const m of memberRows) {
-    const arr = membersBySession.get(m.session_id) ?? [];
-    arr.push({ id: m.account_id, name: nameByAccount.get(m.account_id) ?? null });
-    membersBySession.set(m.session_id, arr);
-  }
-
-  return ((sessions ?? []) as unknown as SessionRow[])
-    .map((s) => ({
-      id: s.id,
-      name: s.name,
-      role: roleBySession.get(s.id) ?? 'member',
-      members: membersBySession.get(s.id) ?? [],
-      updatedAt: s.updated_at ?? null,
+  const rows = (data ?? []) as unknown as SessionForAccountRow[];
+  return rows
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      role: r.role,
+      members: r.members ?? [],
+      updatedAt: r.updated_at ?? null,
     }))
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
@@ -133,8 +107,12 @@ export async function createSession(accountId: string, name: string): Promise<Se
   return session;
 }
 
-// Rename a session. The caller must be a member (creator-only is enforced in the
-// RLS issue #9).
+// Rename a session. Creator-only, enforced by RLS ("Creator updates session")
+// rather than a pre-check here: a membership pre-check tests membership, not
+// creator-ship, so a non-creator member would pass it and then have the real
+// update's RLS silently match zero rows. maybeSingle() turns that (and a
+// nonexistent session) into a clean NotFound instead of single()'s raw
+// PostgREST "no rows" error.
 export async function renameSession(
   sessionId: string,
   accountId: string,
@@ -143,26 +121,21 @@ export async function renameSession(
   if (!name?.trim()) throw new Invalid('A session name is required');
   const db = await createClient();
 
-  const { data: membership } = await db
-    .from('session_members')
-    .select('account_id')
-    .eq('session_id', sessionId)
-    .eq('account_id', accountId)
-    .maybeSingle();
-  if (!membership) throw new NotFound('session', sessionId);
-
   const { data, error } = await db
     .from('sessions')
     .update({ name: name.trim(), updated_at: new Date().toISOString() } as never)
     .eq('id', sessionId)
     .select()
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new NotFound('session', sessionId);
   return data as unknown as SessionRow;
 }
 
 // Set the session's property-search buffer percentage (0-20). The zone shown
-// and searched is extended by this % of its own extent. Members only.
+// and searched is extended by this % of its own extent. Creator-only,
+// enforced by RLS — see renameSession's comment for why there's no membership
+// pre-check.
 export async function setSearchBufferPct(
   sessionId: string,
   accountId: string,
@@ -173,21 +146,14 @@ export async function setSearchBufferPct(
   }
   const db = await createClient();
 
-  const { data: membership } = await db
-    .from('session_members')
-    .select('account_id')
-    .eq('session_id', sessionId)
-    .eq('account_id', accountId)
-    .maybeSingle();
-  if (!membership) throw new NotFound('session', sessionId);
-
   const { data, error } = await db
     .from('sessions')
     .update({ search_buffer_pct: pct, updated_at: new Date().toISOString() } as never)
     .eq('id', sessionId)
     .select()
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new NotFound('session', sessionId);
   return data as unknown as SessionRow;
 }
 
@@ -507,42 +473,17 @@ export async function toggleReaction(
   if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or object');
 
   const db = await createClient();
-  const { data: existing, error: fetchError } = await db
-    .from('listing_reactions')
-    .select('*')
-    .eq('session_id', sessionId)
-    .eq('listing_id', listingId)
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (fetchError) throw fetchError;
-
-  const current = (existing as { reaction: ReactionKind } | null)?.reaction ?? null;
-  const outcome = resolveToggle(current, reaction);
-
-  if (outcome.action === 'remove') {
-    const { error } = await db
-      .from('listing_reactions')
-      .delete()
-      .eq('id', (existing as unknown as { id: string }).id);
-    if (error) throw error;
-    return null;
-  }
-
-  const { data, error } = await db
-    .from('listing_reactions')
-    .upsert(
-      [{
-        session_id: sessionId,
-        listing_id: listingId,
-        user_id: userId,
-        reaction: outcome.reaction,
-      } as never],
-      { onConflict: 'session_id,listing_id,user_id' },
-    )
-    .select()
-    .single();
+  const { data, error } = await db.rpc('toggle_reaction', {
+    p_session_id: sessionId,
+    p_listing_id: listingId,
+    p_user_id: userId,
+    p_reaction: reaction,
+  } as never);
   if (error) throw error;
-  return data as unknown as ListingReaction;
+
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return row as unknown as ListingReaction;
 }
 
 // ---------------------------------------------------------------------------
@@ -741,9 +682,17 @@ export async function createFolder(
 
   // A new folder is always a leaf, so it only has to fit under its parent —
   // checked here and not just in the hub, because the route is reachable
-  // directly.
+  // directly. Only `id`/`parent_id` are needed to confirm the parent exists
+  // and compute its depth, so this queries them directly rather than going
+  // through `listFolders`'s `select('*')`.
   if (parentId) {
-    const siblings = await listFolders(sessionId);
+    const validationDb = await createClient();
+    const { data: siblingRows, error: siblingsError } = await validationDb
+      .from('session_folders')
+      .select('id, parent_id')
+      .eq('session_id', sessionId);
+    if (siblingsError) throw siblingsError;
+    const siblings = (siblingRows ?? []) as unknown as Folder[];
     const parent = siblings.find((f) => f.id === parentId);
     if (!parent) throw new NotFound('folder', parentId);
     if (depthOf(siblings, parentId) >= MAX_FOLDER_DEPTH) {

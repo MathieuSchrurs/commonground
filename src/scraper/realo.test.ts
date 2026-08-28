@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseCards, parsePrice, scrapeRealo } from './realo';
 import { Area } from './areas';
 import * as common from './common';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 // Keep runWithConcurrency and dedupeById real (that's the seam under test —
 // scrapeRealo driving the shared pool), but fake scrapePaginated so we can
@@ -12,6 +13,20 @@ vi.mock('./common', async (importOriginal) => {
   return {
     ...actual,
     scrapePaginated: vi.fn(),
+  };
+});
+
+// Pass through to the real fetchWithTimeout by default, so the pool test can
+// stub the global fetch underneath it; the timeout test below overrides the
+// mock's response to assert the call shape instead.
+vi.mock('../lib/http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/http')>();
+  return {
+    ...actual,
+    fetchWithTimeout: vi.fn(
+      async (...args: Parameters<typeof actual.fetchWithTimeout>) =>
+        actual.fetchWithTimeout(...args)
+    ),
   };
 });
 
@@ -93,7 +108,9 @@ describe('scrapeRealo', () => {
     });
 
     // Each postal code resolves to a distinct search URL via Realo's
-    // suggest API, avoided here with a fake fetch keyed on the query.
+    // suggest API, avoided here with a fake fetch keyed on the query. The
+    // suggest lookup goes through the (pass-through-mocked) fetchWithTimeout,
+    // which delegates to this global fetch.
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const pcMatch = url.match(/q=(\d+)/);
@@ -115,5 +132,36 @@ describe('scrapeRealo', () => {
     await scrapeRealo(areas, 1);
 
     expect(max).toBe(2);
+  });
+});
+
+describe('scrapeRealo fetch timeout', () => {
+  const mockResponse = {
+    ok: true,
+    json: () => Promise.resolve({ data: { suggestions: [] } }),
+  } as unknown as Response;
+
+  beforeEach(() => {
+    vi.mocked(fetchWithTimeout).mockClear();
+    vi.mocked(fetchWithTimeout).mockResolvedValue(mockResponse);
+    // Guards against the pre-migration code path (raw `fetch`) succeeding
+    // silently and masking a missing fetchWithTimeout call.
+    vi.spyOn(global, 'fetch').mockResolvedValue(mockResponse);
+    // The pool's scrapePaginated is faked at file level; give it a shape the
+    // caller can read so the pool itself runs to completion.
+    (common.scrapePaginated as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      listings: [],
+      blocked: false,
+    });
+  });
+
+  it('uses the API fetch timeout for the search-suggest lookup', async () => {
+    await scrapeRealo([{ postalCode: '9000', city: 'Gent', citySlug: 'gent' }]);
+
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ headers: expect.anything() }),
+      API_FETCH_TIMEOUT_MS
+    );
   });
 });
