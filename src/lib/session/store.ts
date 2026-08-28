@@ -53,59 +53,34 @@ export async function getSession(id: string): Promise<SessionRow> {
   return data as unknown as SessionRow;
 }
 
-type MemberRow = { session_id: string; account_id: string; role: string };
+// A row returned by the list_sessions_for_account RPC.
+type SessionForAccountRow = {
+  id: string;
+  name: string | null;
+  updated_at: string | null;
+  role: string;
+  members: { id: string; name: string | null }[];
+};
 
 // Every session an account belongs to (created or was added to), newest activity
-// first, each with its members for avatars/labels.
+// first, each with its members for avatars/labels. One round trip via the
+// list_sessions_for_account RPC — see its migration for why this used to be
+// three sequential queries.
 export async function listSessionsForAccount(accountId: string): Promise<SessionSummary[]> {
   const db = await createClient();
+  const { data, error } = await db.rpc('list_sessions_for_account', {
+    p_account_id: accountId,
+  } as never);
+  if (error) throw error;
 
-  const { data: mine, error: mineErr } = await db
-    .from('session_members')
-    .select('session_id, role')
-    .eq('account_id', accountId);
-  if (mineErr) throw mineErr;
-  const ids = ((mine ?? []) as { session_id: string; role: string }[]).map((m) => m.session_id);
-  if (ids.length === 0) return [];
-  const roleBySession = new Map(
-    ((mine ?? []) as { session_id: string; role: string }[]).map((m) => [m.session_id, m.role]),
-  );
-
-  const [{ data: sessions, error: sErr }, { data: members, error: memErr }] = await Promise.all([
-    db.from('sessions').select('id, name, updated_at').in('id', ids),
-    db.from('session_members').select('session_id, account_id, role').in('session_id', ids),
-  ]);
-  if (sErr) throw sErr;
-  if (memErr) throw memErr;
-
-  const memberRows = (members ?? []) as unknown as MemberRow[];
-  const accountIds = [...new Set(memberRows.map((m) => m.account_id))];
-  const { data: profiles, error: pErr } = await db
-    .from('profiles')
-    .select('id, display_name')
-    .in('id', accountIds);
-  if (pErr) throw pErr;
-  const nameByAccount = new Map(
-    ((profiles ?? []) as { id: string; display_name: string | null }[]).map((p) => [
-      p.id,
-      p.display_name,
-    ]),
-  );
-
-  const membersBySession = new Map<string, { id: string; name: string | null }[]>();
-  for (const m of memberRows) {
-    const arr = membersBySession.get(m.session_id) ?? [];
-    arr.push({ id: m.account_id, name: nameByAccount.get(m.account_id) ?? null });
-    membersBySession.set(m.session_id, arr);
-  }
-
-  return ((sessions ?? []) as unknown as SessionRow[])
-    .map((s) => ({
-      id: s.id,
-      name: s.name,
-      role: roleBySession.get(s.id) ?? 'member',
-      members: membersBySession.get(s.id) ?? [],
-      updatedAt: s.updated_at ?? null,
+  const rows = (data ?? []) as unknown as SessionForAccountRow[];
+  return rows
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      role: r.role,
+      members: r.members ?? [],
+      updatedAt: r.updated_at ?? null,
     }))
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
