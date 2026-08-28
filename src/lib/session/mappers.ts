@@ -32,3 +32,12 @@ export function toCommuteConstraint(row: SessionUserRow): CommuteConstraint {
     hideCommercial: row.hide_commercial_listings,
   };
 }
+
+// The persisted search buffer as a usable percentage. The sessions row stores
+// it snake_case and the store's own validation allows 0-20, but the slider
+// can only express 0-15 — so everything that reads the buffer to widen the
+// common ground clamps through here. Mapping lives in this file per
+// CLAUDE.md, not inline in the routes that consume it.
+export function clampedSearchBufferPct(row: { search_buffer_pct: number | null }): number {
+  return Math.max(0, Math.min(15, row.search_buffer_pct ?? 0));
+}

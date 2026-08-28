@@ -1,6 +1,7 @@
 import mbxClient from '@mapbox/mapbox-sdk';
 import mbxGeocoding from '@mapbox/mapbox-sdk/services/geocoding';
 import { GeocodeResult, IsochroneRequest, IsochroneResponse } from '@/types/geo';
+import { readIsochroneFromCache, writeIsochroneToCache } from './isochrone-cache';
 import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from './http';
 
 const MAPBOX_ACCESS_TOKEN = process.env.MAPBOX_SECRET_TOKEN;
@@ -101,9 +102,40 @@ export async function getIsochrone(
   }
 
   // Cache the promise, not the resolved value, so concurrent callers for the
-  // same key await one in-flight fetch instead of each triggering their own.
-  const promise = fetchIsochrone(lat, lng, minutes, mode);
+  // same key await one in-flight chain instead of each triggering their own
+  // database read and Mapbox fetch. The chain is registered BEFORE it awaits
+  // anything, which is what makes that guarantee hold for callers that arrive
+  // while the database lookup is still in flight.
+  const promise = (async () => {
+    // Second layer: the database. An isochrone is deterministic per rounded
+    // constraint, so a stored one never goes stale — this is what keeps a
+    // cold serverless instance (fresh deploy, scaled-out function) off the
+    // Mapbox critical path entirely.
+    const fromDb = await readIsochroneFromCache(key);
+    if (fromDb && fromDb.features && fromDb.features.length > 0) return fromDb;
+    // A stored body with no features is corrupt (writes are guarded, so this
+    // takes an out-of-band edit) — treat it as a miss and let the Mapbox
+    // fetch below overwrite it.
+
+    const body = await fetchIsochrone(lat, lng, minutes, mode);
+    // An empty response would poison every consumer downstream (the page
+    // stores features[0]) and, worse, would be persisted here forever —
+    // reject it so the failure is visible and nothing is cached.
+    if (!body.features || body.features.length === 0) {
+      throw new Error('Mapbox returned an isochrone with no features');
+    }
+    return body;
+  })();
   isochroneCache.set(key, { promise, expiresAt: Date.now() + ISOCHRONE_CACHE_TTL_MS });
+
+  // Persist the result so every future instance serves it from the database.
+  // writeIsochroneToCache is best-effort and never rejects; the empty second
+  // handler keeps a fetch rejection from surfacing as an unhandled rejection
+  // here (the eviction below already reports it to awaiting callers).
+  promise.then(
+    (body) => writeIsochroneToCache(key, body),
+    () => {}
+  );
 
   // A cached rejection would permanently poison this key, so evict on failure
   // and let the next call retry against Mapbox.
