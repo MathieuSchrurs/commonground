@@ -1,6 +1,22 @@
 import { PropertyListing } from '@/scraper/types';
 
 /**
+ * Resolve the viewer's own hide-commercial preference from a participant
+ * list, defaulting to hidden (matching the DB default on session_users) when
+ * they aren't found or the field is unset. Pulled out as one helper so every
+ * surface that needs "my" preference (Map, ShortlistPanel, the dashboard)
+ * reads it the same way — three independent inline copies of this same
+ * lookup previously meant the DB default and "not found" cases could drift
+ * apart from each other by accident.
+ */
+export function resolveHideCommercial(
+  participants: { id: string; hideCommercial?: boolean }[],
+  myUserId: string | null | undefined
+): boolean {
+  return participants.find((p) => p.id === myUserId)?.hideCommercial ?? true;
+}
+
+/**
  * Whether a listing should be shown to a participant, given their
  * hide-commercial preference. Per participant, not per household — see
  * docs/adr/0004-commercial-filter-is-per-participant.md.

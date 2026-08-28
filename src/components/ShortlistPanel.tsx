@@ -6,7 +6,7 @@ import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 import { CommuteConstraint } from '@/types/user';
 import { computeConvergence, Household } from '@/lib/convergence';
-import { isListingVisible } from '@/lib/listings';
+import { isListingVisible, resolveHideCommercial } from '@/lib/listings';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import HouseholdStandings from '@/components/dashboard/HouseholdStandings';
@@ -35,25 +35,30 @@ export default function ShortlistPanel({
   households = [],
   myUserId = null,
 }: ShortlistPanelProps) {
-  // Defaults to hidden (matches the DB default on session_users) when the
-  // viewer's own hideCommercial isn't set — see docs/adr/0004.
   const hideCommercial = useMemo(
-    () => users.find((u) => u.id === myUserId)?.hideCommercial ?? true,
+    () => resolveHideCommercial(users, myUserId),
     [users, myUserId]
   );
 
   const shortlist = useMemo(() => {
-    const visibleProperties = properties.filter((p) => isListingVisible(p, hideCommercial));
+    // Convergence runs over every listing, unfiltered — yesCount/standings/
+    // unanimous are the group's shared, objective truth and must not vary by
+    // which viewer is looking (that's what "reading the same household
+    // positions as the dashboard" below means). The viewer's own
+    // hide-commercial preference only controls what's displayed, applied
+    // after convergence, the same order the dashboard's favorites/contested
+    // cards use.
     const { considered, contested } = computeConvergence({
-      listings: visibleProperties,
+      listings: properties,
       reactions,
       participants: users,
       households,
     });
+    const visibleConsidered = considered.filter((entry) => isListingVisible(entry.listing, hideCommercial));
     // Everything anyone wants, not just what has reached favorite status — a
     // house the group is still warming to must not vanish off the map.
     const arguing = new Set(contested.map((e) => e.listing.id));
-    return considered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
+    return visibleConsidered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
   }, [properties, reactions, users, households, hideCommercial]);
 
   if (shortlist.length === 0) return null;

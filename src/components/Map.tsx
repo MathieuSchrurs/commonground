@@ -7,7 +7,7 @@ import { Eye, Layers, Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
-import { passesListingFilters } from '@/lib/listings';
+import { passesListingFilters, resolveHideCommercial } from '@/lib/listings';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
@@ -176,10 +176,8 @@ export default function Map({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boundsKey]);
 
-  // Defaults to hidden (matches the DB default on session_users) when the
-  // viewer's own hideCommercial isn't set — see docs/adr/0004.
   const hideCommercial = useMemo(
-    () => users.find((u) => u.id === myUserId)?.hideCommercial ?? true,
+    () => resolveHideCommercial(users, myUserId),
     [users, myUserId]
   );
 

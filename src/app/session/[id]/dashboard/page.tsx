@@ -227,11 +227,15 @@ export default function DashboardPage() {
   }, [sessionId, myUserId, loadMeetingItems, loadDecisions, loadTodos]);
 
   // Any house anyone has reacted to, not just the converging ones — a survey
-  // report matters most for the house the group is arguing about.
-  const houseOptions = convergence.engaged.map((e) => ({
-    id: e.listing.id!,
-    label: e.listing.address ?? e.listing.city ?? e.listing.title ?? e.listing.url,
-  }));
+  // report matters most for the house the group is arguing about. Still
+  // subject to the viewer's own hide-commercial preference, same as
+  // favorites/contested below.
+  const houseOptions = convergence.engaged
+    .filter((e) => isListingVisible(e.listing, myHideCommercial))
+    .map((e) => ({
+      id: e.listing.id!,
+      label: e.listing.address ?? e.listing.city ?? e.listing.title ?? e.listing.url,
+    }));
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
