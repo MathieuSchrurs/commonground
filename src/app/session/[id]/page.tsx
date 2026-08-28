@@ -81,6 +81,7 @@ export default function SessionPage() {
   const [reactions, setReactions] = useState<ListingReaction[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [newListingKeys, setNewListingKeys] = useState<Set<string>>(new Set());
+  const [sessionName, setSessionName] = useState<string | null>(null);
 
   // Refs so the realtime callback always sees current state without stale closures
   const usersRef = useRef<CommuteConstraint[]>([]);
@@ -294,9 +295,10 @@ export default function SessionPage() {
         // The store returns participants already as CommuteConstraints.
         const { users: constraints, session } = await response.json() as {
           users: CommuteConstraint[];
-          session?: { search_buffer_pct?: number };
+          session?: { search_buffer_pct?: number; name?: string };
         };
         setUsers(constraints);
+        setSessionName(session?.name ?? null);
 
         // The persisted search buffer (if any) extends the zone from the start.
         const buffer = Math.max(0, Math.min(15, session?.search_buffer_pct ?? 0));
@@ -700,7 +702,7 @@ export default function SessionPage() {
     // Desktop: lock to viewport height so the map always fills to the bottom
     // and the sidebar scrolls internally. Mobile keeps normal page scrolling.
     <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-background flex flex-col">
-      <SessionHeader sessionId={sessionId} />
+      <SessionHeader sessionId={sessionId} name={sessionName} />
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0">
         <aside className="border-r border-border overflow-y-auto p-4 space-y-4 bg-muted/20 min-h-0">
