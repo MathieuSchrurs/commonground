@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchNewListingsInBbox, hasFreshListingsInBbox, roundIntegerFields, upsertListings } from './db';
+import { fetchKnownLocations, fetchNewListingsInBbox, hasFreshListingsInBbox, roundIntegerFields, upsertListings } from './db';
 import { PropertyListing } from './types';
 
 const base: PropertyListing = {
@@ -27,6 +27,15 @@ interface RecordedCall {
 let calls: RecordedCall[];
 let resolved: { data: unknown[]; error: null };
 
+// When set > 0, every plain read query (anything that isn't the upsert echo)
+// resolves after this many ms instead of synchronously, and records the
+// [start, end) window it was in flight for in `callWindows`. That lets tests
+// tell sequential awaits ("chunk B starts only after chunk A resolves") apart
+// from concurrent ones ("both windows overlap") without reaching into any
+// implementation detail beyond the timing of the public async calls.
+let resolveDelayMs = 0;
+let callWindows: { start: number; end: number }[];
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     from: (...args: unknown[]) => {
@@ -47,6 +56,14 @@ vi.mock('@supabase/supabase-js', () => ({
                 .map((r) => ({ ...r, id: `${r.source}:${r.external_id}` })),
               error: null,
             });
+            return;
+          }
+          if (resolveDelayMs > 0) {
+            const start = Date.now();
+            setTimeout(() => {
+              callWindows.push({ start, end: Date.now() });
+              resolve(resolved);
+            }, resolveDelayMs);
           } else {
             resolve(resolved);
           }
@@ -66,9 +83,16 @@ vi.mock('@supabase/supabase-js', () => ({
 beforeEach(() => {
   calls = [];
   resolved = { data: [], error: null };
+  resolveDelayMs = 0;
+  callWindows = [];
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-key');
 });
+
+// Two windows overlap when each starts before the other ends.
+function overlaps(a: { start: number; end: number }, b: { start: number; end: number }): boolean {
+  return a.start < b.end && b.start < a.end;
+}
 
 describe('roundIntegerFields', () => {
   it('rounds fractional prices to integers (BIGINT-safe)', () => {
@@ -132,7 +156,36 @@ describe('fetchNewListingsInBbox', () => {
   });
 });
 
+describe('fetchKnownLocations', () => {
+  it('issues the per-source chunk lookups concurrently, not one after another', async () => {
+    resolveDelayMs = 20;
+    const listings: PropertyListing[] = [
+      { source: 'realo', external_id: 'a', url: 'https://example.com/a' },
+      { source: 'zimmo', external_id: 'b', url: 'https://example.com/b' },
+    ];
+
+    await fetchKnownLocations(listings);
+
+    // One source each -> one chunk query per source -> two windows to compare.
+    expect(callWindows).toHaveLength(2);
+    expect(overlaps(callWindows[0], callWindows[1])).toBe(true);
+  });
+});
+
 describe('upsertListings', () => {
+  it('issues the per-source existing-price lookups concurrently, not one after another', async () => {
+    resolveDelayMs = 20;
+    const listings: PropertyListing[] = [
+      { source: 'realo', external_id: 'a', url: 'https://example.com/a' },
+      { source: 'zimmo', external_id: 'b', url: 'https://example.com/b' },
+    ];
+
+    await upsertListings(listings);
+
+    expect(callWindows).toHaveLength(2);
+    expect(overlaps(callWindows[0], callWindows[1])).toBe(true);
+  });
+
   it('returns an id for every listing in a batch larger than the 1000-row PostgREST cap', async () => {
     const listings: PropertyListing[] = Array.from({ length: 1200 }, (_, i) => ({
       source: 'realo',

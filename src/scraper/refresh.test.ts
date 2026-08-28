@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveLocations } from './refresh';
+import { purgeStaleListings, resolveLocations } from './refresh';
 import { PropertyListing } from './types';
 import { KnownLocation } from './db';
 
@@ -46,5 +46,54 @@ describe('resolveLocations', () => {
       expect(l.latitude).toBe(1);
       expect(l.longitude).toBe(2);
     }
+  });
+});
+
+describe('purgeStaleListings', () => {
+  it('runs the per-source deletes concurrently, not one after another', async () => {
+    const windows: { start: number; end: number }[] = [];
+    const deleteFn = vi.fn(async () => {
+      const start = Date.now();
+      await new Promise((r) => setTimeout(r, 20));
+      windows.push({ start, end: Date.now() });
+    });
+
+    const sources = [
+      { name: 'realo', listings: [listing()], blocked: false },
+      { name: 'zimmo', listings: [listing()], blocked: false },
+    ];
+
+    await purgeStaleListings(
+      sources,
+      { minLng: 4.3, minLat: 50.8, maxLng: 4.4, maxLat: 50.9 },
+      '2026-08-01T00:00:00.000Z',
+      deleteFn
+    );
+
+    expect(deleteFn).toHaveBeenCalledTimes(2);
+    expect(windows).toHaveLength(2);
+    const [a, b] = windows;
+    const overlap = a.start < b.end && b.start < a.end;
+    expect(overlap).toBe(true);
+  });
+
+  it('skips sources with no listings or that were blocked', async () => {
+    const deleteFn = vi.fn(async () => {});
+
+    const sources = [
+      { name: 'realo', listings: [], blocked: false },
+      { name: 'zimmo', listings: [listing()], blocked: true },
+      { name: 'immoweb', listings: [listing()], blocked: false },
+    ];
+
+    await purgeStaleListings(
+      sources,
+      { minLng: 4.3, minLat: 50.8, maxLng: 4.4, maxLat: 50.9 },
+      '2026-08-01T00:00:00.000Z',
+      deleteFn
+    );
+
+    expect(deleteFn).toHaveBeenCalledTimes(1);
+    expect(deleteFn).toHaveBeenCalledWith('immoweb', 4.3, 50.8, 4.4, 50.9, '2026-08-01T00:00:00.000Z');
   });
 });

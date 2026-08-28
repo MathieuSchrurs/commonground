@@ -146,6 +146,32 @@ export async function resolveLocations(
 }
 
 /**
+ * Delete stale listings for every eligible source concurrently. A source is
+ * eligible when this run actually returned listings for it and it wasn't
+ * blocked — a temporary block or an empty result must not be read as "nothing
+ * left, purge it all". Each source's delete is independent (different
+ * `source` filter, same bbox/cutoff), so there is nothing to sequence.
+ */
+export async function purgeStaleListings(
+  sources: { name: string; listings: PropertyListing[]; blocked: boolean }[],
+  bbox: { minLng: number; minLat: number; maxLng: number; maxLat: number },
+  cutoff: string,
+  deleteFn: (
+    source: string,
+    minLng: number,
+    minLat: number,
+    maxLng: number,
+    maxLat: number,
+    cutoff: string
+  ) => Promise<void> = deleteStaleListings
+): Promise<void> {
+  const eligible = sources.filter(s => s.listings.length > 0 && !s.blocked);
+  await Promise.all(
+    eligible.map(s => deleteFn(s.name, bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat, cutoff))
+  );
+}
+
+/**
  * Refresh listings for a polygon: discover the postal areas inside it, scrape
  * every source filtered to those areas, geocode listings that came back
  * without coordinates (tracking precision), upsert into Supabase, and purge
@@ -215,11 +241,7 @@ export async function refreshListingsForPolygon(
     // Purge listings unseen for a week — and only for sources that returned a
     // non-empty, non-blocked result, so a temporary block can't wipe data.
     const staleCutoff = new Date(Date.now() - STALE_AFTER_MS).toISOString();
-    for (const src of sources) {
-      if (src.listings.length > 0 && !src.blocked) {
-        await deleteStaleListings(src.name, minLng, minLat, maxLng, maxLat, staleCutoff);
-      }
-    }
+    await purgeStaleListings(sources, { minLng, minLat, maxLng, maxLat }, staleCutoff);
     console.log('[refresh] Stale (1w+ unseen) listings purged for successful sources');
   }
 
