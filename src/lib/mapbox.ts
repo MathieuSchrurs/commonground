@@ -12,6 +12,26 @@ if (!MAPBOX_ACCESS_TOKEN) {
 const client = mbxClient({ accessToken: MAPBOX_ACCESS_TOKEN });
 const geocodingClient = mbxGeocoding(client);
 
+const ISOCHRONE_CACHE_TTL_MS = 10 * 60 * 1000;
+const ISOCHRONE_COORD_PRECISION = 5;
+
+interface IsochroneCacheEntry {
+  promise: Promise<IsochroneResponse>;
+  expiresAt: number;
+}
+
+const isochroneCache = new Map<string, IsochroneCacheEntry>();
+
+function roundCoordinate(value: number): number {
+  const factor = 10 ** ISOCHRONE_COORD_PRECISION;
+  return Math.round(value * factor) / factor;
+}
+
+function isochroneCacheKey(params: IsochroneRequest): string {
+  const { lat, lng, minutes, mode } = params;
+  return `${roundCoordinate(lat)}:${roundCoordinate(lng)}:${minutes}:${mode}`;
+}
+
 /**
  * Geocode an address string to get coordinates
  */
@@ -74,6 +94,32 @@ export async function getIsochrone(
     throw new Error('Mode must be "driving" or "cycling"');
   }
 
+  const key = isochroneCacheKey(params);
+  const cached = isochroneCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.promise;
+  }
+
+  // Cache the promise, not the resolved value, so concurrent callers for the
+  // same key await one in-flight fetch instead of each triggering their own.
+  const promise = fetchIsochrone(lat, lng, minutes, mode);
+  isochroneCache.set(key, { promise, expiresAt: Date.now() + ISOCHRONE_CACHE_TTL_MS });
+
+  // A cached rejection would permanently poison this key, so evict on failure
+  // and let the next call retry against Mapbox.
+  promise.catch(() => {
+    isochroneCache.delete(key);
+  });
+
+  return promise;
+}
+
+async function fetchIsochrone(
+  lat: number,
+  lng: number,
+  minutes: number,
+  mode: 'driving' | 'cycling'
+): Promise<IsochroneResponse> {
   try {
     const response = await fetchWithTimeout(
       `https://api.mapbox.com/isochrone/v1/mapbox/${mode}/${lng},${lat}?contours_minutes=${minutes}&polygons=true&access_token=${MAPBOX_ACCESS_TOKEN}`,

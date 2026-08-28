@@ -377,16 +377,15 @@ export default function SessionPage() {
             }
           }
 
-          // A rate-limited or failed isochrone must not become an unhandled
-          // rejection inside this async callback.
-          let isochrone;
-          try {
-            isochrone = await fetchIsochrone(constraint);
-          } catch {
-            return;
-          }
-
           if (eventType === 'INSERT') {
+            // A rate-limited or failed isochrone must not become an unhandled
+            // rejection inside this async callback.
+            let isochrone;
+            try {
+              isochrone = await fetchIsochrone(constraint);
+            } catch {
+              return;
+            }
             // Re-check after the async fetch: a concurrent delivery may have
             // appended it while we were computing the isochrone.
             if (usersRef.current.some(u => u.id === constraint.id)) return;
@@ -396,16 +395,28 @@ export default function SessionPage() {
             setIsochrones(updatedIsochrones);
             await computeAndSetIntersection(updatedIsochrones);
           } else {
+            // The server broadcasts the recomputed isochrone for a commute
+            // constraint change (isochrone-update, below) — this just keeps `users` in
+            // step so name/address/etc. stay current.
             const idx = usersRef.current.findIndex(u => u.id === constraint.id);
             if (idx === -1) return;
             const updatedUsers = [...usersRef.current];
             updatedUsers[idx] = constraint;
-            const updatedIsochrones = [...isochronesRef.current];
-            updatedIsochrones[idx] = isochrone;
             setUsers(updatedUsers);
-            setIsochrones(updatedIsochrones);
-            await computeAndSetIntersection(updatedIsochrones);
           }
+        }
+      )
+      .on(
+        'broadcast',
+        { event: 'isochrone-update' },
+        async (msg) => {
+          const { userId, isochrone } = (msg as unknown as { payload: { userId: string; isochrone: Feature<Polygon | MultiPolygon> } }).payload;
+          const idx = usersRef.current.findIndex((u) => u.id === userId);
+          if (idx === -1) return;
+          const updatedIsochrones = [...isochronesRef.current];
+          updatedIsochrones[idx] = isochrone;
+          setIsochrones(updatedIsochrones);
+          await computeAndSetIntersection(updatedIsochrones);
         }
       )
       .subscribe();
@@ -503,27 +514,21 @@ export default function SessionPage() {
         throw new Error(data.error || 'Failed to update user');
       }
 
-      // Fetch new isochrone
-      const isochrone = await fetchIsochrone(updatedUser);
-
-      // Update local state
+      // Update local state so the editor's own UI reflects the edit
+      // immediately. The recomputed isochrone arrives for everyone (including
+      // this client) via the isochrone-update broadcast.
       const userIndex = users.findIndex(u => u.id === updatedUser.id);
       const updatedUsers = [...users];
       updatedUsers[userIndex] = updatedUser;
-      
-      const updatedIsochrones = [...isochrones];
-      updatedIsochrones[userIndex] = isochrone;
 
       setUsers(updatedUsers);
-      setIsochrones(updatedIsochrones);
-      await computeAndSetIntersection(updatedIsochrones);
       setEditingUser(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId, users, isochrones, fetchIsochrone, computeAndSetIntersection]);
+  }, [sessionId, users]);
 
   const handleRemoveUser = useCallback(async (userId: string) => {
     try {
