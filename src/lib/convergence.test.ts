@@ -460,4 +460,51 @@ describe('listingsAwaiting', () => {
     // Pruned, not pending — nothing is waiting on anyone here.
     expect(listingsAwaiting(result, 'h3')).toEqual([]);
   });
+
+  it('does not ask a household that hides commercial listings about one it is silent on', () => {
+    const hidingParticipants = participants.map((p) =>
+      p.householdId === 'h3' ? { ...p, hideCommercial: true } : p,
+    );
+
+    const result = computeConvergence({
+      participants: hidingParticipants,
+      households,
+      listings: [listing('a', 'commercial')],
+      reactions: [reaction('a', 'u1', 'love')], // h3 never reacts — hidden from them
+    });
+
+    expect(listingsAwaiting(result, 'h3')).toEqual([]);
+  });
+
+  it('still asks a household with one member who has not hidden commercial listings', () => {
+    const mixedParticipants = participants.map((p) => {
+      if (p.id === 'u5') return { ...p, hideCommercial: true };
+      if (p.id === 'u6') return { ...p, hideCommercial: false };
+      return p;
+    });
+
+    const result = computeConvergence({
+      participants: mixedParticipants,
+      households,
+      listings: [listing('a', 'commercial')],
+      reactions: [reaction('a', 'u1', 'love')], // h3 never reacts, and Finn (u6) can see it
+    });
+
+    expect(listingsAwaiting(result, 'h3').map((e) => e.listing.id)).toEqual(['a']);
+  });
+
+  it('still asks a household that hides commercial listings about a non-commercial listing', () => {
+    const hidingParticipants = participants.map((p) =>
+      p.householdId === 'h3' ? { ...p, hideCommercial: true } : p,
+    );
+
+    const result = computeConvergence({
+      participants: hidingParticipants,
+      households,
+      listings: [listing('a')],
+      reactions: [reaction('a', 'u1', 'love')], // h3 never reacts
+    });
+
+    expect(listingsAwaiting(result, 'h3').map((e) => e.listing.id)).toEqual(['a']);
+  });
 });

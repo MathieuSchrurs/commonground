@@ -25,6 +25,10 @@ export interface HouseholdStanding {
   // know which partner to talk to.
   loveNames: string[];
   objectNames: string[];
+  // True when every member of this household hides commercial listings, so
+  // this household can never react to one and its silence there is not a
+  // real silence. See docs/adr/0004.
+  hidesCommercial: boolean;
 }
 
 export interface ListingConvergence {
@@ -138,6 +142,7 @@ export function computeConvergence({
         position,
         loveNames,
         objectNames,
+        hidesCommercial: units[i].members.every((m) => (m.hideCommercial ?? true) === true),
       };
     });
 
@@ -148,7 +153,7 @@ export function computeConvergence({
     // is excluded from the unanimous check entirely (see docs/adr/0004).
     const unanimousStandings =
       listing.property_type === 'commercial'
-        ? standings.filter((_, i) => units[i].members.some((m) => (m.hideCommercial ?? true) === false))
+        ? standings.filter((s) => !s.hidesCommercial)
         : standings;
 
     const entry: ListingConvergence = {
@@ -201,6 +206,12 @@ export function listingsAwaiting(
   householdId: string,
 ): ListingConvergence[] {
   return considered.filter((e) =>
-    e.standings.some((s) => s.householdId === householdId && s.position === 'silent'),
+    e.standings.some((s) => {
+      if (s.householdId !== householdId || s.position !== 'silent') return false;
+      // A household that hides commercial listings can never react to one,
+      // so its silence there is never real silence — same exclusion as
+      // unanimous, and for the same reason (see docs/adr/0004).
+      return !(e.listing.property_type === 'commercial' && s.hidesCommercial);
+    }),
   );
 }
