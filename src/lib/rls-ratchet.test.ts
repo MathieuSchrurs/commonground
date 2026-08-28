@@ -16,13 +16,6 @@ import { join } from 'node:path';
 // that needs an exception needs a reason, in writing, here.
 const KNOWN_OPEN = new Set<string>();
 
-// Shared, non-session-scoped tables (property_listings is the only one today)
-// have no session_id and so never enter `sessionScopedTables()` or this
-// ratchet's session checks — public read is intentional there. Their
-// write-permissiveness is instead covered by 'non-session-scoped shared
-// tables' below, which flags any FOR ALL/INSERT/UPDATE/DELETE policy left
-// wide open on them.
-
 const MIGRATIONS = join(process.cwd(), 'supabase', 'migrations');
 
 // `USING (true)` lets anyone read and `WITH CHECK (true)` lets anyone write, so
@@ -74,6 +67,16 @@ describe('permissive policy detection', () => {
       isPermissive('for all using (public.is_member(session_id)) with check (public.is_member(session_id))'),
     ).toBe(false);
     expect(isPermissive('for select using (auth.uid() is not null)')).toBe(false);
+  });
+
+  it('reads the operation a policy applies to', () => {
+    expect(operationOf('for all using (true) with check (true)')).toBe('ALL');
+    expect(operationOf('for select using (true)')).toBe('SELECT');
+    expect(operationOf('for insert with check (true)')).toBe('INSERT');
+    expect(operationOf('for update using (true) with check (true)')).toBe('UPDATE');
+    expect(operationOf('for delete using (true)')).toBe('DELETE');
+    // Postgres treats an unqualified policy as FOR ALL.
+    expect(operationOf('using (true) with check (true)')).toBe('ALL');
   });
 });
 
