@@ -1,3 +1,5 @@
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
+
 export interface GeocodedPoint {
   latitude: number;
   longitude: number;
@@ -19,7 +21,7 @@ export async function geocodeAddress(address: string): Promise<GeocodedPoint | n
   // Request address-level results first; fall back to postcode if not found
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${query}.json?types=address,postcode&country=BE&limit=1&access_token=${token}`;
 
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url, undefined, API_FETCH_TIMEOUT_MS);
   if (!res.ok) return null;
 
   const data = await res.json();
