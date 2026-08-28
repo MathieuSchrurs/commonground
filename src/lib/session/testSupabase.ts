@@ -39,9 +39,15 @@ const CHAINABLE_METHODS = ['select', 'eq', 'in', 'update', 'upsert', 'delete', '
 export function createFakeSupabaseClient(options?: {
   rpcResult?: FakeResult;
   fromResult?: FakeResult;
+  // Per-table override of `fromResult`, for a test where two different
+  // tables in the same call need to resolve differently (e.g. a membership
+  // row exists but an update matches none) — falls back to `fromResult` for
+  // any table not listed here.
+  fromResultsByTable?: Record<string, FakeResult>;
 }): FakeSupabaseClient {
   const rpcResult = options?.rpcResult ?? { data: null, error: null };
   const fromResult = options?.fromResult ?? { data: null, error: null };
+  const fromResultsByTable = options?.fromResultsByTable ?? {};
   const queries: RecordedQuery[] = [];
 
   const rpc = vi.fn().mockResolvedValue(rpcResult);
@@ -49,6 +55,7 @@ export function createFakeSupabaseClient(options?: {
   function makeChain(table: string) {
     const record: RecordedQuery = { table, calls: [] };
     queries.push(record);
+    const tableResult = fromResultsByTable[table] ?? fromResult;
 
     const chain: Record<string, unknown> = {};
     for (const method of CHAINABLE_METHODS) {
@@ -59,17 +66,17 @@ export function createFakeSupabaseClient(options?: {
     }
     chain.single = (...args: unknown[]) => {
       record.calls.push({ method: 'single', args });
-      return Promise.resolve(fromResult);
+      return Promise.resolve(tableResult);
     };
     chain.maybeSingle = (...args: unknown[]) => {
       record.calls.push({ method: 'maybeSingle', args });
-      return Promise.resolve(fromResult);
+      return Promise.resolve(tableResult);
     };
     // Some real chains (e.g. `.delete().eq(...)`) resolve without a terminal
     // `.single()`/`.maybeSingle()` call — make the chain itself thenable so
     // `await`-ing it directly also works.
     (chain as unknown as { then: PromiseLike<FakeResult>['then'] }).then = (resolve) =>
-      Promise.resolve(fromResult).then(resolve as never);
+      Promise.resolve(tableResult).then(resolve as never);
 
     return chain;
   }

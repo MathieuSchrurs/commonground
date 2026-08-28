@@ -7,8 +7,8 @@ vi.mock('@/utils/supabase/server', () => ({ createClient: vi.fn() }));
 // Imported after the mock, same reason as route.test.ts's sibling mocks: the
 // store must pick up the mocked createClient, not the real one (which reads
 // NEXT_PUBLIC_SUPABASE_* at import time).
-import { listSessionsForAccount, toggleReaction } from './store';
-import { Invalid } from './errors';
+import { listSessionsForAccount, renameSession, setSearchBufferPct, toggleReaction } from './store';
+import { Invalid, NotFound } from './errors';
 
 const mockedCreateClient = vi.mocked(createClient);
 
@@ -131,5 +131,98 @@ describe('listSessionsForAccount', () => {
 
     expect(result).toEqual([]);
     expect(fake.rpc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('renameSession', () => {
+  beforeEach(() => {
+    mockedCreateClient.mockReset();
+  });
+
+  it('renames with a single query against sessions, never touching session_members', async () => {
+    const row = {
+      id: 'session-1',
+      name: 'New Name',
+      created_by: 'account-1',
+      search_buffer_pct: 5,
+    };
+    const fake = createFakeSupabaseClient({ fromResult: { data: row, error: null } });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    const result = await renameSession('session-1', 'account-1', 'New Name');
+
+    expect(fake.from).toHaveBeenCalledTimes(1);
+    expect(fake.from).toHaveBeenCalledWith('sessions');
+    expect(fake.from).not.toHaveBeenCalledWith('session_members');
+    expect(result).toEqual(row);
+  });
+
+  it('throws NotFound (not a raw PostgREST error) when a member who is not the creator has their update refused by RLS', async () => {
+    // The old pre-check tested membership, not creator-ship: a non-creator
+    // member has a session_members row, so that check would have passed —
+    // but the update's RLS ("Creator updates session") matches zero rows.
+    const fake = createFakeSupabaseClient({
+      fromResultsByTable: {
+        session_members: { data: { account_id: 'account-2' }, error: null },
+        sessions: { data: null, error: null },
+      },
+    });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    let caught: unknown;
+    try {
+      await renameSession('session-1', 'account-2', 'New Name');
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(NotFound);
+    expect((caught as NotFound).name).toBe('NotFound');
+  });
+});
+
+describe('setSearchBufferPct', () => {
+  beforeEach(() => {
+    mockedCreateClient.mockReset();
+  });
+
+  it('updates with a single query against sessions, never touching session_members', async () => {
+    const row = {
+      id: 'session-1',
+      name: 'Session One',
+      created_by: 'account-1',
+      search_buffer_pct: 10,
+    };
+    const fake = createFakeSupabaseClient({ fromResult: { data: row, error: null } });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    const result = await setSearchBufferPct('session-1', 'account-1', 10);
+
+    expect(fake.from).toHaveBeenCalledTimes(1);
+    expect(fake.from).toHaveBeenCalledWith('sessions');
+    expect(fake.from).not.toHaveBeenCalledWith('session_members');
+    expect(result).toEqual(row);
+  });
+
+  it('throws NotFound (not a raw PostgREST error) when a member who is not the creator has their update refused by RLS', async () => {
+    // Same case as renameSession: membership exists, so the old pre-check
+    // would have passed, but the update's RLS matches zero rows.
+    const fake = createFakeSupabaseClient({
+      fromResultsByTable: {
+        session_members: { data: { account_id: 'account-2' }, error: null },
+        sessions: { data: null, error: null },
+      },
+    });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    let caught: unknown;
+    try {
+      await setSearchBufferPct('session-1', 'account-2', 10);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(NotFound);
+    expect((caught as NotFound).name).toBe('NotFound');
   });
 });

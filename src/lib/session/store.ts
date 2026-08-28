@@ -107,8 +107,12 @@ export async function createSession(accountId: string, name: string): Promise<Se
   return session;
 }
 
-// Rename a session. The caller must be a member (creator-only is enforced in the
-// RLS issue #9).
+// Rename a session. Creator-only, enforced by RLS ("Creator updates session")
+// rather than a pre-check here: a membership pre-check tests membership, not
+// creator-ship, so a non-creator member would pass it and then have the real
+// update's RLS silently match zero rows. maybeSingle() turns that (and a
+// nonexistent session) into a clean NotFound instead of single()'s raw
+// PostgREST "no rows" error.
 export async function renameSession(
   sessionId: string,
   accountId: string,
@@ -117,26 +121,21 @@ export async function renameSession(
   if (!name?.trim()) throw new Invalid('A session name is required');
   const db = await createClient();
 
-  const { data: membership } = await db
-    .from('session_members')
-    .select('account_id')
-    .eq('session_id', sessionId)
-    .eq('account_id', accountId)
-    .maybeSingle();
-  if (!membership) throw new NotFound('session', sessionId);
-
   const { data, error } = await db
     .from('sessions')
     .update({ name: name.trim(), updated_at: new Date().toISOString() } as never)
     .eq('id', sessionId)
     .select()
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new NotFound('session', sessionId);
   return data as unknown as SessionRow;
 }
 
 // Set the session's property-search buffer percentage (0-20). The zone shown
-// and searched is extended by this % of its own extent. Members only.
+// and searched is extended by this % of its own extent. Creator-only,
+// enforced by RLS — see renameSession's comment for why there's no membership
+// pre-check.
 export async function setSearchBufferPct(
   sessionId: string,
   accountId: string,
@@ -147,21 +146,14 @@ export async function setSearchBufferPct(
   }
   const db = await createClient();
 
-  const { data: membership } = await db
-    .from('session_members')
-    .select('account_id')
-    .eq('session_id', sessionId)
-    .eq('account_id', accountId)
-    .maybeSingle();
-  if (!membership) throw new NotFound('session', sessionId);
-
   const { data, error } = await db
     .from('sessions')
     .update({ search_buffer_pct: pct, updated_at: new Date().toISOString() } as never)
     .eq('id', sessionId)
     .select()
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new NotFound('session', sessionId);
   return data as unknown as SessionRow;
 }
 
