@@ -85,6 +85,20 @@ describe('parseCards', () => {
     const [listing] = parseCards(html);
     expect(listing.property_type).toBe('commercial');
   });
+
+  it('classifies a land listing as land', () => {
+    const html = `
+      <div>before</div>
+      <div data-scope="componentEstateGridItem" class="component-estate-grid-item grond">
+        <a data-href="/en/bouwgrond-9000-gent/789012">Bouwgrond</a>
+        <span>€ 150.000</span>
+        <span>500 m²</span>
+        <div data-images="{srcAt2x&quot;:&quot;https:\\/\\/realocdn.com\\/image\\/7\\/ghi.jpg\\/736x491&quot;}"></div>
+      </div>`;
+
+    const [listing] = parseCards(html);
+    expect(listing.property_type).toBe('land');
+  });
 });
 
 describe('scrapeRealo', () => {

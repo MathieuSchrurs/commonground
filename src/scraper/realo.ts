@@ -1,6 +1,6 @@
 import { PropertyListing } from './types';
 import { Area } from './areas';
-import { BROWSER_HEADERS, dedupeById, runWithConcurrency, scrapePaginated } from './common';
+import { BROWSER_HEADERS, dedupeById, mapPropertyType, runWithConcurrency, scrapePaginated } from './common';
 import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 // Use Realo's suggest API to get the proper search URL for a postal code
@@ -60,10 +60,7 @@ export function parseCards(html: string): PropertyListing[] {
 
     // Property type hint from card classes
     const typeHint = card.match(/class="[^"]*component-estate-grid-item[^"]*"/)?.[0] ?? '';
-    let property_type: PropertyListing['property_type'] = 'other';
-    if (/apartment|flat|studio/i.test(typeHint + card.slice(0, 300))) property_type = 'apartment';
-    else if (/house|villa|bungalow/i.test(typeHint + card.slice(0, 300))) property_type = 'house';
-    else if (/office|retail|industrial|commercial/i.test(typeHint + card.slice(0, 300))) property_type = 'commercial';
+    const property_type = mapPropertyType(typeHint + card.slice(0, 300));
 
     return [{
       source: 'realo' as const,
