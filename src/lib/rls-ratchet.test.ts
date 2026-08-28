@@ -16,6 +16,13 @@ import { join } from 'node:path';
 // that needs an exception needs a reason, in writing, here.
 const KNOWN_OPEN = new Set<string>();
 
+// Shared, non-session-scoped tables (property_listings is the only one today)
+// have no session_id and so never enter `sessionScopedTables()` or this
+// ratchet's session checks — public read is intentional there. Their
+// write-permissiveness is instead covered by 'non-session-scoped shared
+// tables' below, which flags any FOR ALL/INSERT/UPDATE/DELETE policy left
+// wide open on them.
+
 const MIGRATIONS = join(process.cwd(), 'supabase', 'migrations');
 
 // `USING (true)` lets anyone read and `WITH CHECK (true)` lets anyone write, so
@@ -23,6 +30,13 @@ const MIGRATIONS = join(process.cwd(), 'supabase', 'migrations');
 // but accepting any insert is still a way into someone else's session.
 function isPermissive(body: string): boolean {
   return /\busing\s*\(\s*true\s*\)/i.test(body) || /\bwith\s+check\s*\(\s*true\s*\)/i.test(body);
+}
+
+// Postgres defaults an unqualified CREATE POLICY to FOR ALL, so a missing
+// FOR clause must read as ALL rather than as "no operation".
+function operationOf(body: string): 'ALL' | 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' {
+  const m = /\bfor\s+(all|select|insert|update|delete)\b/i.exec(body);
+  return (m ? m[1].toUpperCase() : 'ALL') as 'ALL' | 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE';
 }
 
 // Policy names may or may not be quoted; both forms are legal SQL and a future
@@ -70,7 +84,10 @@ describe('row-level security ratchet', () => {
   // Replay the migrations in order so a policy that was later dropped or
   // replaced doesn't count against the table that fixed it.
   const scoped = new Set<string>();
-  const active = new Map<string, { table: string; permissive: boolean }>();
+  const active = new Map<
+    string,
+    { table: string; permissive: boolean; operation: ReturnType<typeof operationOf> }
+  >();
 
   for (const sql of all) {
     for (const t of sessionScopedTables(sql)) scoped.add(t);
@@ -81,7 +98,11 @@ describe('row-level security ratchet', () => {
 
     for (const [, quoted, bare, table, body] of sql.matchAll(createRe)) {
       const t = clean(table);
-      active.set(`${t}::${quoted ?? bare}`, { table: t, permissive: isPermissive(body) });
+      active.set(`${t}::${quoted ?? bare}`, {
+        table: t,
+        permissive: isPermissive(body),
+        operation: operationOf(body),
+      });
     }
   }
 
@@ -113,5 +134,18 @@ describe('row-level security ratchet', () => {
       [...active.values()].filter((p) => p.permissive && scoped.has(p.table)).map((p) => p.table),
     );
     for (const table of KNOWN_OPEN) expect(stillOpen).toContain(table);
+  });
+
+  // property_listings is a shared pool with no session_id, so it's outside
+  // sessionScopedTables() and the checks above — but a permissive write
+  // policy there (FOR ALL/INSERT/UPDATE/DELETE USING/CHECK (true)) would
+  // still let anyone insert, update or delete any listing. Public read
+  // (FOR SELECT USING (true)) is intentional and must not be flagged.
+  it('leaves no write-permissive policy active on property_listings', () => {
+    const writeOpen = [...active.values()]
+      .filter((p) => p.table === 'property_listings' && p.permissive && p.operation !== 'SELECT')
+      .map((p) => p.operation);
+
+    expect(writeOpen).toEqual([]);
   });
 });
