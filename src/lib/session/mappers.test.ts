@@ -53,4 +53,22 @@ describe('toCommuteConstraint', () => {
     // Null, not undefined: a household of one is a real state, not missing data.
     expect(toCommuteConstraint(row).householdId).toBeNull();
   });
+
+  it('reads whether a participant wants commercial listings hidden', () => {
+    const base = {
+      id: 'u1',
+      name: 'Anna',
+      address: 'Gent',
+      latitude: 51.05,
+      longitude: 3.72,
+      max_minutes: 30,
+      transport_mode: 'cycling' as const,
+    };
+    expect(
+      toCommuteConstraint({ ...base, hide_commercial_listings: false }).hideCommercial,
+    ).toBe(false);
+    expect(
+      toCommuteConstraint({ ...base, hide_commercial_listings: true }).hideCommercial,
+    ).toBe(true);
+  });
 });

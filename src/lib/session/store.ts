@@ -280,6 +280,9 @@ export async function addUser(
       longitude: input.longitude,
       max_minutes: input.maxMinutes,
       transport_mode: input.transportMode,
+      // Omitted when not supplied, so the DB's DEFAULT true (hidden) applies —
+      // see docs/adr/0004.
+      ...(input.hideCommercial !== undefined && { hide_commercial_listings: input.hideCommercial }),
     } as never])
     .select()
     .single();
@@ -304,6 +307,7 @@ export async function updateUser(
       longitude: input.longitude,
       max_minutes: input.maxMinutes,
       transport_mode: input.transportMode,
+      ...(input.hideCommercial !== undefined && { hide_commercial_listings: input.hideCommercial }),
       updated_at: new Date().toISOString(),
     } as never)
     .eq('id', userId)

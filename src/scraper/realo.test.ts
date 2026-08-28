@@ -42,4 +42,18 @@ describe('parseCards', () => {
   it('returns nothing when no grid items are present', () => {
     expect(parseCards('<html><body>empty</body></html>')).toEqual([]);
   });
+
+  it('classifies an office listing as commercial', () => {
+    const html = `
+      <div>before</div>
+      <div data-scope="componentEstateGridItem" class="component-estate-grid-item office">
+        <a data-href="/en/kantoorstraat-9000-gent/654321">Kantoorstraat</a>
+        <span>€ 480.000</span>
+        <span>200 m²</span>
+        <div data-images="{srcAt2x&quot;:&quot;https:\\/\\/realocdn.com\\/image\\/6\\/def.jpg\\/736x491&quot;}"></div>
+      </div>`;
+
+    const [listing] = parseCards(html);
+    expect(listing.property_type).toBe('commercial');
+  });
 });

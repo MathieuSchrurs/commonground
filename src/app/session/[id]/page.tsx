@@ -711,6 +711,7 @@ export default function SessionPage() {
             reactions={reactions}
             users={users}
             households={households}
+            myUserId={myUserId}
           />
           <HouseholdsCard
             sessionId={sessionId}

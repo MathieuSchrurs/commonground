@@ -6,6 +6,7 @@ import { PropertyListing } from '@/scraper/types';
 import { ListingReaction } from '@/types/reactions';
 import { CommuteConstraint } from '@/types/user';
 import { computeConvergence, Household } from '@/lib/convergence';
+import { isListingVisible, resolveHideCommercial } from '@/lib/listings';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import HouseholdStandings from '@/components/dashboard/HouseholdStandings';
@@ -15,6 +16,8 @@ interface ShortlistPanelProps {
   reactions: ListingReaction[];
   users: CommuteConstraint[];
   households?: Household[];
+  /** session_user id of the person at this browser; null until they pick */
+  myUserId?: string | null;
 }
 
 function formatPrice(price?: number): string {
@@ -30,19 +33,33 @@ export default function ShortlistPanel({
   reactions,
   users,
   households = [],
+  myUserId = null,
 }: ShortlistPanelProps) {
+  const hideCommercial = useMemo(
+    () => resolveHideCommercial(users, myUserId),
+    [users, myUserId]
+  );
+
   const shortlist = useMemo(() => {
+    // Convergence runs over every listing, unfiltered — yesCount/standings/
+    // unanimous are the group's shared, objective truth and must not vary by
+    // which viewer is looking (that's what "reading the same household
+    // positions as the dashboard" below means). The viewer's own
+    // hide-commercial preference only controls what's displayed, applied
+    // after convergence, the same order the dashboard's favorites/contested
+    // cards use.
     const { considered, contested } = computeConvergence({
       listings: properties,
       reactions,
       participants: users,
       households,
     });
+    const visibleConsidered = considered.filter((entry) => isListingVisible(entry.listing, hideCommercial));
     // Everything anyone wants, not just what has reached favorite status — a
     // house the group is still warming to must not vanish off the map.
     const arguing = new Set(contested.map((e) => e.listing.id));
-    return considered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
-  }, [properties, reactions, users, households]);
+    return visibleConsidered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
+  }, [properties, reactions, users, households, hideCommercial]);
 
   if (shortlist.length === 0) return null;
 

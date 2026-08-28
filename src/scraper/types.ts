@@ -11,7 +11,7 @@ export interface PropertyListing {
   latitude?: number;
   longitude?: number;
   price?: number;
-  property_type?: 'house' | 'apartment' | 'land' | 'other';
+  property_type?: 'house' | 'apartment' | 'land' | 'commercial' | 'other';
   bedrooms?: number;
   surface_area?: number;
   land_area?: number;

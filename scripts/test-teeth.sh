@@ -34,7 +34,7 @@ trap cleanup EXIT
 TEST_FILES=()
 while IFS= read -r f; do
   [ -n "$f" ] && TEST_FILES+=("$f")
-done < <(git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD | grep -E 'src/.*\.test\.ts$' || true)
+done < <(git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD | grep -E 'src/.*\.test\.tsx?$' || true)
 
 if [ "${#TEST_FILES[@]}" -eq 0 ]; then
   echo "FAIL: no test files added or changed vs ${BASE_REF} (${BASE_SHA:0:8})" >&2

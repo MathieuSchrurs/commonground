@@ -14,6 +14,7 @@ export interface SessionUserRow {
   max_minutes: number;
   transport_mode: TransportMode;
   household_id?: string | null;
+  hide_commercial_listings?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -28,5 +29,6 @@ export function toCommuteConstraint(row: SessionUserRow): CommuteConstraint {
     maxMinutes: row.max_minutes,
     transportMode: row.transport_mode,
     householdId: row.household_id ?? null,
+    hideCommercial: row.hide_commercial_listings,
   };
 }

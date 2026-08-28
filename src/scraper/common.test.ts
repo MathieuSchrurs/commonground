@@ -34,6 +34,15 @@ describe('mapPropertyType', () => {
     expect(mapPropertyType('Hoeve')).toBe('house');
   });
 
+  it('maps commercial-like types to commercial', () => {
+    expect(mapPropertyType('office')).toBe('commercial');
+    expect(mapPropertyType('retail')).toBe('commercial');
+    expect(mapPropertyType('industrial')).toBe('commercial');
+    expect(mapPropertyType('kantoor')).toBe('commercial');
+    expect(mapPropertyType('winkel')).toBe('commercial');
+    expect(mapPropertyType('bedrijfsruimte')).toBe('commercial');
+  });
+
   it('falls back to other', () => {
     expect(mapPropertyType('garage')).toBe('other');
     expect(mapPropertyType(undefined)).toBe('other');

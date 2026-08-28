@@ -29,6 +29,7 @@ export default function UserInputForm({
   const [address, setAddress] = useState('');
   const [maxMinutes, setMaxMinutes] = useState(30);
   const [transportMode, setTransportMode] = useState<TransportMode>('driving');
+  const [hideCommercial, setHideCommercial] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -37,11 +38,13 @@ export default function UserInputForm({
       setAddress(userToEdit.address);
       setMaxMinutes(userToEdit.maxMinutes);
       setTransportMode(userToEdit.transportMode);
+      setHideCommercial(userToEdit.hideCommercial ?? true);
     } else {
       setName('');
       setAddress('');
       setMaxMinutes(30);
       setTransportMode('driving');
+      setHideCommercial(true);
     }
     setError('');
   }, [userToEdit]);
@@ -76,6 +79,7 @@ export default function UserInputForm({
           longitude: geocodeResult.longitude,
           maxMinutes,
           transportMode,
+          hideCommercial,
         });
       } else {
         onAddUser({
@@ -86,12 +90,14 @@ export default function UserInputForm({
           longitude: geocodeResult.longitude,
           maxMinutes,
           transportMode,
+          hideCommercial,
         });
 
         setName('');
         setAddress('');
         setMaxMinutes(30);
         setTransportMode('driving');
+        setHideCommercial(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -104,6 +110,7 @@ export default function UserInputForm({
     setAddress('');
     setMaxMinutes(30);
     setTransportMode('driving');
+    setHideCommercial(true);
     setError('');
   };
 
@@ -193,6 +200,25 @@ export default function UserInputForm({
               <span>5 min</span>
               <span>60 min</span>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Commercial listings</Label>
+            <button
+              type="button"
+              onClick={() => setHideCommercial((v) => !v)}
+              disabled={isLoading}
+              aria-pressed={hideCommercial}
+              className={cn(
+                'flex items-center justify-center gap-2 h-10 px-3 w-full rounded-md border text-sm font-medium transition-colors',
+                'disabled:opacity-50 disabled:pointer-events-none',
+                hideCommercial
+                  ? 'border-foreground bg-foreground text-background'
+                  : 'border-border hover:bg-accent hover:text-accent-foreground'
+              )}
+            >
+              {hideCommercial ? 'Hide commercial listings' : 'Show commercial listings'}
+            </button>
           </div>
 
           {error && (
