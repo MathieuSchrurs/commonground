@@ -35,6 +35,12 @@ export function roundIntegerFields(l: PropertyListing): PropertyListing {
 // URI length limit, so large key lookups must be chunked.
 const IN_CHUNK_SIZE = 200;
 
+// PostgREST caps a single response at 1000 rows (see fetchListingsInBbox
+// below). An upsert's .select() echoes back one row per row written, so an
+// unbounded upsert would silently lose ids — and the price_history entries
+// keyed on them — for anything past the 1000th row in the batch.
+const UPSERT_CHUNK_SIZE = 500;
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -80,14 +86,16 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
 
   const { upserts, history } = annotatePriceChanges(deduped, existing);
 
-  const { data, error } = await supabase
-    .from('property_listings')
-    .upsert(upserts, { onConflict: 'source,external_id' })
-    .select();
+  const rows: PropertyListing[] = [];
+  for (const batch of chunk(upserts, UPSERT_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('property_listings')
+      .upsert(batch, { onConflict: 'source,external_id' })
+      .select();
 
-  if (error) throw new Error(`Supabase upsert error: ${error.message}`);
-
-  const rows = (data ?? []) as PropertyListing[];
+    if (error) throw new Error(`Supabase upsert error: ${error.message}`);
+    rows.push(...((data ?? []) as PropertyListing[]));
+  }
 
   // Append the price series — history keys resolve to DB ids via the upsert result
   if (history.length > 0) {
