@@ -2,20 +2,19 @@
 
 import React, { useMemo } from 'react';
 import { ExternalLink, Heart, MessageCircleWarning } from 'lucide-react';
-import { PropertyListing } from '@/scraper/types';
-import { ListingReaction } from '@/types/reactions';
 import { CommuteConstraint } from '@/types/user';
-import { computeConvergence, Household } from '@/lib/convergence';
+import { Convergence } from '@/lib/convergence';
 import { isListingVisible, resolveHideCommercial } from '@/lib/listings';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import HouseholdStandings from '@/components/dashboard/HouseholdStandings';
 
 interface ShortlistPanelProps {
-  properties: PropertyListing[];
-  reactions: ListingReaction[];
   users: CommuteConstraint[];
-  households?: Household[];
+  // The group's shared convergence view — computed once by the page from the
+  // same listings/reactions/users/households, so the map and the shortlist
+  // can never disagree from running the (expensive) computation twice.
+  convergence: Convergence;
   /** session_user id of the person at this browser; null until they pick */
   myUserId?: string | null;
 }
@@ -29,10 +28,8 @@ function formatPrice(price?: number): string {
 // dashboard so the two surfaces can never disagree about what the group
 // thinks. Converging houses first, then the ones still being argued over.
 export default function ShortlistPanel({
-  properties,
-  reactions,
   users,
-  households = [],
+  convergence,
   myUserId = null,
 }: ShortlistPanelProps) {
   const hideCommercial = useMemo(
@@ -48,18 +45,13 @@ export default function ShortlistPanel({
     // hide-commercial preference only controls what's displayed, applied
     // after convergence, the same order the dashboard's favorites/contested
     // cards use.
-    const { considered, contested } = computeConvergence({
-      listings: properties,
-      reactions,
-      participants: users,
-      households,
-    });
+    const { considered, contested } = convergence;
     const visibleConsidered = considered.filter((entry) => isListingVisible(entry.listing, hideCommercial));
     // Everything anyone wants, not just what has reached favorite status — a
     // house the group is still warming to must not vanish off the map.
     const arguing = new Set(contested.map((e) => e.listing.id));
     return visibleConsidered.map((entry) => ({ entry, contested: arguing.has(entry.listing.id) }));
-  }, [properties, reactions, users, households, hideCommercial]);
+  }, [convergence, hideCommercial]);
 
   if (shortlist.length === 0) return null;
 

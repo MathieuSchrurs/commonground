@@ -16,7 +16,7 @@ import SessionHeader from '@/components/SessionHeader';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import HouseholdsCard from '@/components/HouseholdsCard';
 import { Household } from '@/types/household';
-import { computeConvergence } from '@/lib/convergence';
+import { computeConvergence, Convergence } from '@/lib/convergence';
 import { Button } from '@/components/ui/button';
 import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
 
@@ -166,17 +166,22 @@ export default function SessionPage() {
 
   useEffect(() => { loadHouseholds(); }, [loadHouseholds]);
 
+  // Computed once here and threaded to both the map (via unanimousListingIds)
+  // and ShortlistPanel (via convergence), so the two surfaces read the same
+  // result instead of each recomputing it from the same inputs.
+  const convergence: Convergence = useMemo(() => computeConvergence({
+    listings: properties,
+    reactions,
+    participants: users,
+    households,
+  }), [properties, reactions, users, households]);
+
   // Which listings every household is yes on. Derived from convergence so the
   // pin glow, the shortlist and the dashboard can never disagree.
-  const unanimousListingIds = useMemo(() => {
-    const { favorites } = computeConvergence({
-      listings: properties,
-      reactions,
-      participants: users,
-      households,
-    });
-    return new Set(favorites.filter((f) => f.unanimous).map((f) => f.listing.id!));
-  }, [properties, reactions, users, households]);
+  const unanimousListingIds = useMemo(
+    () => new Set(convergence.favorites.filter((f) => f.unanimous).map((f) => f.listing.id!)),
+    [convergence]
+  );
 
   // Votes from the others land live; refetching the whole (tiny) set is
   // simpler and safer than patching state from realtime payloads
@@ -721,10 +726,8 @@ export default function SessionPage() {
             isLoading={isLoading}
           />
           <ShortlistPanel
-            properties={properties}
-            reactions={reactions}
             users={users}
-            households={households}
+            convergence={convergence}
             myUserId={myUserId}
           />
           <HouseholdsCard
