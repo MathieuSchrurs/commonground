@@ -25,6 +25,10 @@ export interface HouseholdStanding {
   // know which partner to talk to.
   loveNames: string[];
   objectNames: string[];
+  // True when every member of this household hides commercial listings, so
+  // this household can never react to one and its silence there is not a
+  // real silence. See docs/adr/0004.
+  hidesCommercial: boolean;
 }
 
 export interface ListingConvergence {
@@ -59,6 +63,12 @@ export interface Convergence {
 // is split and one of its members has objected. Either way the listing is
 // contested rather than converged.
 const isObjecting = (s: HouseholdStanding) => s.position === 'no' || s.position === 'split';
+
+// A household that hides commercial listings can never react to one, so on a
+// commercial listing its position is never a real position — not a yes for
+// unanimous, not a silence for listingsAwaiting (see docs/adr/0004).
+const hiddenFromHousehold = (listing: PropertyListing, standing: HouseholdStanding) =>
+  listing.property_type === 'commercial' && standing.hidesCommercial;
 
 export function computeConvergence({
   listings,
@@ -138,6 +148,7 @@ export function computeConvergence({
         position,
         loveNames,
         objectNames,
+        hidesCommercial: units[i].members.every((m) => (m.hideCommercial ?? true) === true),
       };
     });
 
@@ -145,11 +156,8 @@ export function computeConvergence({
     // react to one, so it is permanently silent on every commercial listing.
     // Left in, it would wrongly and permanently block that listing from ever
     // reaching unanimous — so for commercial listings only, such a household
-    // is excluded from the unanimous check entirely (see docs/adr/0004).
-    const unanimousStandings =
-      listing.property_type === 'commercial'
-        ? standings.filter((_, i) => units[i].members.some((m) => (m.hideCommercial ?? true) === false))
-        : standings;
+    // is excluded from the unanimous check entirely.
+    const unanimousStandings = standings.filter((s) => !hiddenFromHousehold(listing, s));
 
     const entry: ListingConvergence = {
       listing,
@@ -201,6 +209,8 @@ export function listingsAwaiting(
   householdId: string,
 ): ListingConvergence[] {
   return considered.filter((e) =>
-    e.standings.some((s) => s.householdId === householdId && s.position === 'silent'),
+    e.standings.some(
+      (s) => s.householdId === householdId && s.position === 'silent' && !hiddenFromHousehold(e.listing, s),
+    ),
   );
 }
