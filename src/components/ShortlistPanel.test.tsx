@@ -82,7 +82,7 @@ describe('ShortlistPanel — commercial-listing visibility', () => {
 });
 
 describe('ShortlistPanel — convergence prop', () => {
-  it('uses the convergence passed in as a prop instead of recomputing it', () => {
+  it('renders from the convergence passed in as a prop instead of recomputing it', () => {
     const properties = [listing('house-1', 'house')];
     const reactions = [reaction('r1', 'house-1', 'me')];
     const users = [participant('me', false)];
@@ -92,6 +92,10 @@ describe('ShortlistPanel — convergence prop', () => {
 
     render(<ShortlistPanel users={users} convergence={convergence} myUserId="me" />);
 
+    // Renders real content derived from the prop (not a stub that happens to
+    // call nothing) — this listing only appears if the component actually
+    // reads `convergence.considered` rather than ignoring the prop.
+    expect(screen.getByText('Price on request')).toBeInTheDocument();
     expect(computeConvergence).not.toHaveBeenCalled();
   });
 });

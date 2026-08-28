@@ -40,15 +40,15 @@ vi.mock('@/utils/supabase/client', () => ({
   }),
 }));
 
-vi.mock('@/components/SessionHeader', () => ({ default: () => null }));
 vi.mock('@/components/UserInputForm', () => ({ default: () => null }));
 vi.mock('@/components/UserList', () => ({ default: () => null }));
 vi.mock('@/components/ShortlistPanel', () => ({ default: () => null }));
 vi.mock('@/components/ZoneLegend', () => ({ default: () => null }));
 
-const { mapProps, householdsCardProps } = vi.hoisted(() => ({
+const { mapProps, householdsCardProps, sessionHeaderProps } = vi.hoisted(() => ({
   mapProps: { current: null as null | Record<string, unknown> },
   householdsCardProps: { current: null as null | Record<string, unknown> },
+  sessionHeaderProps: { current: null as null | Record<string, unknown> },
 }));
 
 vi.mock('@/components/Map', () => ({
@@ -61,6 +61,13 @@ vi.mock('@/components/Map', () => ({
 vi.mock('@/components/HouseholdsCard', () => ({
   default: (props: Record<string, unknown>) => {
     householdsCardProps.current = props;
+    return null;
+  },
+}));
+
+vi.mock('@/components/SessionHeader', () => ({
+  default: (props: Record<string, unknown>) => {
+    sessionHeaderProps.current = props;
     return null;
   },
 }));
@@ -104,6 +111,7 @@ beforeEach(async () => {
   for (const key of Object.keys(channelRegistry)) delete channelRegistry[key];
   mapProps.current = null;
   householdsCardProps.current = null;
+  sessionHeaderProps.current = null;
   // The page snapshots the previous visit from localStorage in a mount
   // effect; this jsdom environment doesn't expose it, so stub the surface
   // the page uses.
@@ -328,5 +336,38 @@ describe('SessionPage — loading households and users runs concurrently', () =>
     await (householdsCardProps.current!.onChanged as () => Promise<void>)();
 
     expect(overlapObserved).toBe(true);
+  });
+});
+
+describe('SessionPage — passes the fetched session name to SessionHeader', () => {
+  it('threads session.name from the existing /api/sessions/:id fetch into SessionHeader, without a dedicated fetch', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/me')) {
+          return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
+        }
+        if (url === `/api/sessions/${SESSION_ID}`) {
+          return { ok: true, json: async () => ({ users: [USER_1], session: { name: 'My Hunt' } }) };
+        }
+        if (url === `/api/sessions/${SESSION_ID}/households`) {
+          return { ok: true, json: async () => ({ households: [] }) };
+        }
+        if (url === '/api/isochrone') {
+          return { ok: true, json: async () => minimalFeatureCollection('initial') };
+        }
+        if (url === '/api/intersection') {
+          return { ok: true, json: async () => ({}) };
+        }
+        return { ok: true, json: async () => ({}) };
+      })
+    );
+
+    render(<SessionPage />);
+
+    await waitFor(() => {
+      expect(sessionHeaderProps.current?.name).toBe('My Hunt');
+    });
+    expect(sessionHeaderProps.current?.sessionId).toBe(SESSION_ID);
   });
 });
