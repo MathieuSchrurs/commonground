@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { parseCards } from './immoscoop';
+import { describe, expect, it, vi } from 'vitest';
+import { parseCards, scrapeImmoscoop } from './immoscoop';
+import { Area } from './areas';
+import * as common from './common';
+
+// Keep runWithConcurrency and dedupeById real (that's the seam under test —
+// scrapeImmoscoop driving the shared pool), but fake scrapePaginated so we can
+// observe how many city-scrapes are in flight at once without real network
+// calls or real per-page delays.
+vi.mock('./common', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./common')>();
+  return {
+    ...actual,
+    scrapePaginated: vi.fn(),
+  };
+});
 
 // Mirrors the live card structure: anchor with data-selector children
 const card = `
@@ -51,5 +65,31 @@ describe('parseCards (immoscoop)', () => {
     const [listing] = parseCards(html);
     expect(listing.postal_code).toBe('9051');
     expect(listing.city).toBe('sint denijs westrem');
+  });
+});
+
+describe('scrapeImmoscoop', () => {
+  it('scrapes cities through the shared pool at a concurrency of 2', async () => {
+    let current = 0;
+    let max = 0;
+
+    const scrapePaginated = common.scrapePaginated as unknown as ReturnType<typeof vi.fn>;
+    scrapePaginated.mockImplementation(async () => {
+      current++;
+      max = Math.max(max, current);
+      await new Promise(r => setTimeout(r, 20));
+      current--;
+      return { listings: [], blocked: false };
+    });
+
+    const areas: Area[] = Array.from({ length: 5 }, (_, i) => ({
+      postalCode: `900${i}`,
+      city: `City${i}`,
+      citySlug: `city-${i}`,
+    }));
+
+    await scrapeImmoscoop(areas, 1, 5);
+
+    expect(max).toBe(2);
   });
 });

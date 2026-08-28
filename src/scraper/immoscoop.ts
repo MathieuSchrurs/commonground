@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
 import { Area } from './areas';
-import { mapPropertyType, scrapePaginated, dedupeById } from './common';
+import { mapPropertyType, scrapePaginated, dedupeById, runWithConcurrency } from './common';
 
 const BASE_URL = 'https://www.immoscoop.be/zoeken/te-koop';
 
@@ -80,18 +80,26 @@ export async function scrapeImmoscoop(
   const all: PropertyListing[] = [];
   let blocked = false;
 
-  for (const slug of citySlugs) {
-    const result = await scrapePaginated({
-      label: 'ImmoScoop',
-      maxPages,
-      delayMs: 1000,
-      buildUrl: page => `${BASE_URL}/${slug}?page=${page}`,
-      parse: parseCards,
-    });
+  const results = await runWithConcurrency(
+    citySlugs,
+    2,
+    slug =>
+      scrapePaginated({
+        label: 'ImmoScoop',
+        maxPages,
+        delayMs: 1000,
+        buildUrl: page => `${BASE_URL}/${slug}?page=${page}`,
+        parse: parseCards,
+      }),
+    r => r.blocked
+  );
+
+  // Cities not dispatched because an earlier one was blocked leave an empty
+  // slot in `results` — skip those rather than crash on `undefined.listings`.
+  for (const result of results) {
+    if (!result) continue;
     all.push(...result.listings);
     blocked = blocked || result.blocked;
-    if (result.blocked) break;
-    await new Promise(r => setTimeout(r, 800));
   }
 
   const unique = dedupeById(all);
