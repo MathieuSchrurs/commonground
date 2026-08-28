@@ -7,10 +7,30 @@ import { Eye, Layers, Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
+import { isListingVisible } from '@/lib/listings';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
+
+/**
+ * Shared source/price/commercial predicate used both to compute the
+ * filtered count/list (`matchesFilters`) and to set marker opacity on
+ * already-rendered Mapbox markers — kept as one function so the two stay
+ * in sync.
+ */
+function passesListingFilters(
+  listing: PropertyListing,
+  sourceFilter: Record<string, boolean>,
+  priceRange: [number, number] | null,
+  hideCommercial: boolean
+): boolean {
+  if (sourceFilter[listing.source] === false) return false;
+  if (listing.price != null && priceRange) {
+    if (listing.price < priceRange[0] || listing.price > priceRange[1]) return false;
+  }
+  return isListingVisible(listing, hideCommercial);
+}
 
 interface MapProps {
   users: CommuteConstraint[];
@@ -175,13 +195,17 @@ export default function Map({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boundsKey]);
 
-  const matchesFilters = useCallback((listing: PropertyListing) => {
-    if (sourceFilter[listing.source] === false) return false;
-    if (listing.price != null && priceRange) {
-      if (listing.price < priceRange[0] || listing.price > priceRange[1]) return false;
-    }
-    return true;
-  }, [sourceFilter, priceRange]);
+  // Defaults to hidden (matches the DB default on session_users) when the
+  // viewer's own hideCommercial isn't set — see docs/adr/0004.
+  const hideCommercial = useMemo(
+    () => users.find((u) => u.id === myUserId)?.hideCommercial ?? true,
+    [users, myUserId]
+  );
+
+  const matchesFilters = useCallback(
+    (listing: PropertyListing) => passesListingFilters(listing, sourceFilter, priceRange, hideCommercial),
+    [sourceFilter, priceRange, hideCommercial]
+  );
 
   const visibleCount = useMemo(
     () => properties.filter(matchesFilters).length,
@@ -661,14 +685,12 @@ export default function Map({
       // opacity for its own terrain-occlusion fade and would override us on
       // every zoom/pan.
       const dot = el.firstElementChild as HTMLElement | null;
-      const sourceOk = sourceFilter[listing.source] !== false;
-      const priceOk = listing.price == null || !priceRange
-        || (listing.price >= priceRange[0] && listing.price <= priceRange[1]);
-      const visible = visibility.properties && sourceOk && priceOk;
+      const visible = visibility.properties
+        && passesListingFilters(listing, sourceFilter, priceRange, hideCommercial);
       if (dot) dot.style.opacity = visible ? '1' : '0';
       el.style.pointerEvents = visible ? 'auto' : 'none';
     }
-  }, [visibility.properties, sourceFilter, priceRange, mapLoaded, properties]);
+  }, [visibility.properties, sourceFilter, priceRange, hideCommercial, mapLoaded, properties]);
 
   // Isochrone visibility — toggles per-zone outline layers AND filters the
   // combined fade/outline-dash layer so only the checked zones contribute.
