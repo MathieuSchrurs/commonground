@@ -42,12 +42,16 @@ export function createFakeSupabaseClient(options?: {
   // Per-table override of `fromResult`, for a test where two different
   // tables in the same call need to resolve differently (e.g. a membership
   // row exists but an update matches none) — falls back to `fromResult` for
-  // any table not listed here.
-  fromResultsByTable?: Record<string, FakeResult>;
+  // any table not listed here. An array lets successive `.from(table)` calls
+  // against the *same* table resolve differently in turn (e.g. a
+  // parent-validation lookup followed by the insert), holding on the last
+  // entry once exhausted.
+  fromResultsByTable?: Record<string, FakeResult | FakeResult[]>;
 }): FakeSupabaseClient {
   const rpcResult = options?.rpcResult ?? { data: null, error: null };
   const fromResult = options?.fromResult ?? { data: null, error: null };
   const fromResultsByTable = options?.fromResultsByTable ?? {};
+  const tableCallCounts: Record<string, number> = {};
   const queries: RecordedQuery[] = [];
 
   const rpc = vi.fn().mockResolvedValue(rpcResult);
@@ -55,7 +59,15 @@ export function createFakeSupabaseClient(options?: {
   function makeChain(table: string) {
     const record: RecordedQuery = { table, calls: [] };
     queries.push(record);
-    const tableResult = fromResultsByTable[table] ?? fromResult;
+    const configured = fromResultsByTable[table];
+    let tableResult: FakeResult;
+    if (Array.isArray(configured)) {
+      const callIndex = tableCallCounts[table] ?? 0;
+      tableCallCounts[table] = callIndex + 1;
+      tableResult = configured[Math.min(callIndex, configured.length - 1)];
+    } else {
+      tableResult = configured ?? fromResult;
+    }
 
     const chain: Record<string, unknown> = {};
     for (const method of CHAINABLE_METHODS) {

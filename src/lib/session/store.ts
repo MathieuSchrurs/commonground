@@ -682,9 +682,17 @@ export async function createFolder(
 
   // A new folder is always a leaf, so it only has to fit under its parent —
   // checked here and not just in the hub, because the route is reachable
-  // directly.
+  // directly. Only `id`/`parent_id` are needed to confirm the parent exists
+  // and compute its depth, so this queries them directly rather than going
+  // through `listFolders`'s `select('*')`.
   if (parentId) {
-    const siblings = await listFolders(sessionId);
+    const validationDb = await createClient();
+    const { data: siblingRows, error: siblingsError } = await validationDb
+      .from('session_folders')
+      .select('id, parent_id')
+      .eq('session_id', sessionId);
+    if (siblingsError) throw siblingsError;
+    const siblings = (siblingRows ?? []) as unknown as Folder[];
     const parent = siblings.find((f) => f.id === parentId);
     if (!parent) throw new NotFound('folder', parentId);
     if (depthOf(siblings, parentId) >= MAX_FOLDER_DEPTH) {

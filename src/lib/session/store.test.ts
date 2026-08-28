@@ -7,7 +7,7 @@ vi.mock('@/utils/supabase/server', () => ({ createClient: vi.fn() }));
 // Imported after the mock, same reason as route.test.ts's sibling mocks: the
 // store must pick up the mocked createClient, not the real one (which reads
 // NEXT_PUBLIC_SUPABASE_* at import time).
-import { listSessionsForAccount, renameSession, setSearchBufferPct, toggleReaction } from './store';
+import { createFolder, listSessionsForAccount, renameSession, setSearchBufferPct, toggleReaction } from './store';
 import { Invalid, NotFound } from './errors';
 
 const mockedCreateClient = vi.mocked(createClient);
@@ -224,5 +224,80 @@ describe('setSearchBufferPct', () => {
 
     expect(caught).toBeInstanceOf(NotFound);
     expect((caught as NotFound).name).toBe('NotFound');
+  });
+});
+
+describe('createFolder', () => {
+  beforeEach(() => {
+    mockedCreateClient.mockReset();
+  });
+
+  it('validates a supplied parent with a narrow id/parent_id select, not select(*)', async () => {
+    const fake = createFakeSupabaseClient({
+      fromResultsByTable: {
+        session_folders: [
+          { data: [{ id: 'parent-1', parent_id: null }], error: null },
+          {
+            data: { id: 'new-folder', session_id: 'session-1', name: 'Photos', parent_id: 'parent-1' },
+            error: null,
+          },
+        ],
+      },
+    });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    await createFolder('session-1', 'Photos', 'parent-1');
+
+    const folderQueries = fake.queries.filter((q) => q.table === 'session_folders');
+    const validationSelect = folderQueries[0].calls.find((c) => c.method === 'select');
+    expect(validationSelect?.args).toEqual(['id, parent_id']);
+  });
+
+  it('creates a folder under a valid, shallow-enough parent', async () => {
+    const newFolder = { id: 'new-folder', session_id: 'session-1', name: 'Photos', parent_id: 'parent-1' };
+    const fake = createFakeSupabaseClient({
+      fromResultsByTable: {
+        session_folders: [
+          { data: [{ id: 'parent-1', parent_id: null }], error: null },
+          { data: newFolder, error: null },
+        ],
+      },
+    });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    const result = await createFolder('session-1', 'Photos', 'parent-1');
+
+    expect(result).toEqual(newFolder);
+  });
+
+  it('throws NotFound when the supplied parentId does not exist', async () => {
+    const fake = createFakeSupabaseClient({
+      fromResultsByTable: {
+        session_folders: [{ data: [], error: null }],
+      },
+    });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    await expect(createFolder('session-1', 'Photos', 'missing-parent')).rejects.toThrow(NotFound);
+  });
+
+  it('throws Invalid when the parent is already at MAX_FOLDER_DEPTH', async () => {
+    const fake = createFakeSupabaseClient({
+      fromResultsByTable: {
+        session_folders: [
+          {
+            data: [
+              { id: 'level1', parent_id: null },
+              { id: 'level2', parent_id: 'level1' },
+              { id: 'level3', parent_id: 'level2' },
+            ],
+            error: null,
+          },
+        ],
+      },
+    });
+    mockedCreateClient.mockResolvedValue(fake as never);
+
+    await expect(createFolder('session-1', 'Photos', 'level3')).rejects.toThrow(Invalid);
   });
 });
