@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import { PropertyListing } from './types';
 import { Area } from './areas';
-import { mapPropertyType, scrapePaginated, dedupeById } from './common';
+import { mapPropertyType, scrapePaginated, dedupeById, runWithConcurrency } from './common';
 
 const BASE_URL = 'https://immovlan.be/en/real-estate?transactiontypes=for-sale&propertytypes=house,apartment';
 
@@ -91,18 +91,26 @@ export async function scrapeImmovlan(
   const all: PropertyListing[] = [];
   let blocked = false;
 
-  for (const town of towns) {
-    const result = await scrapePaginated({
-      label: 'Immovlan',
-      maxPages,
-      delayMs: 1000,
-      buildUrl: page => `${BASE_URL}&towns=${town.postalCode}-${town.citySlug}&page=${page}`,
-      parse: parseCards,
-    });
+  const results = await runWithConcurrency(
+    towns,
+    2,
+    town =>
+      scrapePaginated({
+        label: 'Immovlan',
+        maxPages,
+        delayMs: 1000,
+        buildUrl: page => `${BASE_URL}&towns=${town.postalCode}-${town.citySlug}&page=${page}`,
+        parse: parseCards,
+      }),
+    r => r.blocked
+  );
+
+  // Towns not dispatched because an earlier one was blocked leave an empty
+  // slot in `results` — skip those rather than crash on `undefined.listings`.
+  for (const result of results) {
+    if (!result) continue;
     all.push(...result.listings);
     blocked = blocked || result.blocked;
-    if (result.blocked) break;
-    await new Promise(r => setTimeout(r, 800));
   }
 
   // The same listing can appear under adjacent towns
