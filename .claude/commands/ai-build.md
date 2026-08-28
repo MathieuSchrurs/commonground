@@ -10,14 +10,24 @@ nothing but the unit you hand them. Do the thinking here and delegate only the
 work.
 
 **This runs as a single, non-interactive invocation with no supervising loop.**
-Dispatch every subagent — `Explore`, `implementer`, `code-review`'s sub-agents,
-anything — synchronously and wait for its result inline before continuing.
-Never dispatch in the background: the background pattern works by resuming a
-*later turn* when a completion notification arrives, and there is no later
-turn here. A backgrounded subagent's work is silently stranded the moment your
-own turn ends, and the run completes having done nothing — indistinguishable
-from success in the logs. If a tool defaults to backgrounding, explicitly
-request synchronous/foreground execution every time.
+Whatever tool you dispatch a subagent with — `Explore`, `implementer`,
+`code-review`'s sub-agents, anything — defaults to running it in the
+background. That default is wrong here and you must override it on **every
+single dispatch, with no exceptions**: pass `run_in_background: false` (or
+whichever parameter on that specific tool call means "run this synchronously
+and block until it returns") explicitly, every time, even when the tool
+description says background is the default or the recommended choice.
+
+The background pattern only works when a later turn exists to resume when a
+completion notification arrives. There is no later turn here — this whole run
+is one turn, start to finish. A backgrounded subagent's work is silently
+stranded the instant you end your turn to "wait for the notification," and the
+run completes having done nothing, reporting success — indistinguishable from
+a real run in the logs unless someone checks for an actual branch, comment, or
+PR. This has already happened twice on this exact command. Do not let it
+happen again: if you catch yourself about to end a turn to wait for anything,
+that is the bug, and the fix is to have dispatched synchronously in the first
+place.
 
 ## 1. Read the brief
 
