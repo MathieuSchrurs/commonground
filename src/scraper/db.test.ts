@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchKnownLocations, fetchNewListingsInBbox, hasFreshListingsInBbox, roundIntegerFields, upsertListings } from './db';
+import {
+  fetchKnownLocations,
+  fetchListingsInBbox,
+  fetchListingsInPolygon,
+  fetchNewListingsInBbox,
+  hasFreshListingsInBbox,
+  roundIntegerFields,
+  upsertListings,
+} from './db';
 import { PropertyListing } from './types';
 
 const base: PropertyListing = {
@@ -169,6 +177,86 @@ describe('fetchKnownLocations', () => {
     // One source each -> one chunk query per source -> two windows to compare.
     expect(callWindows).toHaveLength(2);
     expect(overlaps(callWindows[0], callWindows[1])).toBe(true);
+  });
+});
+
+describe('fetchListingsInBbox', () => {
+  it('selects only the columns the map displays, never *', async () => {
+    await fetchListingsInBbox(4.3, 50.8, 4.4, 50.9);
+
+    const select = calls.find((c) => c.method === 'select');
+    expect(select?.args[0]).not.toBe('*');
+    // The freshness column is server-only bookkeeping — the map payload
+    // should never pay for it.
+    expect(select?.args[0]).not.toContain('scraped_at');
+    // Everything the client renders or filters on must still be there.
+    for (const column of [
+      'id', 'source', 'external_id', 'url', 'title', 'address', 'city',
+      'postal_code', 'latitude', 'longitude', 'price', 'previous_price',
+      'price_changed_at', 'property_type', 'bedrooms', 'surface_area',
+      'land_area', 'image_url', 'first_seen_at', 'location_precision',
+    ]) {
+      expect(select?.args[0]).toContain(column);
+    }
+  });
+
+  it('pages with range windows ordered by id', async () => {
+    await fetchListingsInBbox(4.3, 50.8, 4.4, 50.9);
+
+    expect(calls).toContainEqual({ method: 'order', args: ['id', { ascending: true }] });
+    expect(calls).toContainEqual({ method: 'range', args: [0, 999] });
+  });
+});
+
+describe('fetchListingsInPolygon', () => {
+  const square: import('geojson').Feature<import('geojson').Polygon> = {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[[4.35, 50.83], [4.38, 50.83], [4.38, 50.86], [4.35, 50.86], [4.35, 50.83]]],
+    },
+  };
+
+  const inside = (n: number): PropertyListing => ({
+    source: 'realo',
+    external_id: `in-${n}`,
+    url: `https://example.com/in-${n}`,
+    latitude: 50.84,
+    longitude: 4.36,
+  });
+
+  it('keeps only listings inside the polygon and reports dedupe stats', async () => {
+    resolved = {
+      data: [inside(1), inside(2), { ...inside(3), latitude: 51.0, longitude: 4.9 }],
+      error: null,
+    };
+
+    const { listings, stats } = await fetchListingsInPolygon(square);
+
+    expect(listings.map((l) => l.external_id)).toEqual(['in-1', 'in-2']);
+    expect(stats).toEqual({ bboxListings: 3, insidePolygon: 2, mergedDuplicates: 0 });
+  });
+
+  it('drops rows without coordinates before testing the polygon', async () => {
+    resolved = {
+      data: [inside(1), { source: 'zimmo', external_id: 'no-coords', url: 'https://example.com/x' }],
+      error: null,
+    };
+
+    const { listings, stats } = await fetchListingsInPolygon(square);
+
+    expect(listings.map((l) => l.external_id)).toEqual(['in-1']);
+    expect(stats).toEqual({ bboxListings: 2, insidePolygon: 1, mergedDuplicates: 0 });
+  });
+
+  it('collapses exact (source, external_id) duplicates', async () => {
+    resolved = { data: [inside(1), inside(1)], error: null };
+
+    const { listings, stats } = await fetchListingsInPolygon(square);
+
+    expect(listings).toHaveLength(1);
+    expect(stats).toEqual({ bboxListings: 2, insidePolygon: 1, mergedDuplicates: 0 });
   });
 });
 

@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import * as turf from '@turf/turf';
 import { refreshListingsForPolygon } from '@/scraper/refresh';
-import { dedupeAcrossSources } from '@/scraper/dedupe';
-import { fetchListingsInBbox, hasFreshListingsInBbox } from '@/scraper/db';
+import { fetchListingsInPolygon, hasFreshListingsInBbox } from '@/scraper/db';
 
 // Three scrapers in parallel + geocoding pushes past the old 60s ceiling
 export const maxDuration = 120;
@@ -40,37 +39,21 @@ export async function POST(req: NextRequest) {
     if (!cacheOnly && (force || !hasRecentData)) {
       debug.refresh = await refreshListingsForPolygon(polygon);
     }
-    const allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
-    debug.cachedListings = allListings.length;
+    // One shared path for "stored listings in this search area": bbox
+    // prefilter, point-in-polygon, cross-source dedupe. The bootstrap route
+    // runs the identical query, so both callers always agree.
+    const { listings: canonical, stats } = await fetchListingsInPolygon(polygon);
 
-    // Polygon filter (bbox is a superset of the polygon)
-    const inside = allListings.filter(listing => {
-      if (!listing.latitude || !listing.longitude) return false;
-      const point = turf.point([listing.longitude, listing.latitude]);
-      return turf.booleanPointInPolygon(point, polygon);
-    });
-
-    // Drop exact duplicates by (source, external_id) — should already be
-    // unique after upsert, but cheap belt-and-braces.
-    const seenKey = new Set<string>();
-    const uniquePerSource = inside.filter(l => {
-      const k = `${l.source}:${l.external_id}`;
-      if (seenKey.has(k)) return false;
-      seenKey.add(k);
-      return true;
-    });
-
-    const { listings: canonical, merged } = dedupeAcrossSources(uniquePerSource);
-
-    debug.insidePolygon = uniquePerSource.length;
+    debug.cachedListings = stats.bboxListings;
+    debug.insidePolygon = stats.insidePolygon;
     debug.afterDedup = canonical.length;
-    debug.mergedDuplicates = merged;
+    debug.mergedDuplicates = stats.mergedDuplicates;
     debug.bySource = canonical.reduce<Record<string, number>>((acc, l) => {
       acc[l.source] = (acc[l.source] ?? 0) + 1;
       return acc;
     }, {});
     console.log(
-      `[/api/scrape] Final: ${canonical.length} unique listings (merged ${merged} duplicates from ${uniquePerSource.length} pre-dedup)`,
+      `[/api/scrape] Final: ${canonical.length} unique listings (merged ${stats.mergedDuplicates} duplicates from ${stats.insidePolygon} pre-dedup)`,
       debug.bySource
     );
 

@@ -141,8 +141,25 @@ describe('SessionPage — isochrone updates arrive via broadcast, not client ref
         if (url.endsWith('/me')) {
           return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
         }
-        if (url === `/api/sessions/${SESSION_ID}`) {
-          return { ok: true, json: async () => ({ users: [USER_1, USER_2], session: {} }) };
+        if (url === `/api/sessions/${SESSION_ID}/bootstrap`) {
+          // Initial isochrone areas arrive inside the bootstrap payload, so
+          // the page never has to POST /api/isochrone on first paint.
+          return {
+            ok: true,
+            json: async () => ({
+              participants: [USER_1, USER_2],
+              bufferPct: 0,
+              isochrones: [
+                minimalFeatureCollection('initial').features[0],
+                minimalFeatureCollection('initial').features[0],
+              ],
+              intersection: minimalFeatureCollection('initial'),
+              areaKm2: 1,
+              bufferedIntersection: minimalFeatureCollection('initial'),
+              bufferedAreaKm2: 1,
+              listings: [],
+            }),
+          };
         }
         if (url === '/api/isochrone') {
           return isochroneSpy();
@@ -162,7 +179,9 @@ describe('SessionPage — isochrone updates arrive via broadcast, not client ref
     });
 
     const callsBefore = isochroneSpy.mock.calls.length;
-    expect(callsBefore).toBe(2);
+    // The bootstrap payload supplied both areas — the page must not have
+    // re-fetched them per participant on first paint.
+    expect(callsBefore).toBe(0);
 
     const channel = channelRegistry[`session_${SESSION_ID}`];
     expect(channel?.postgresChanges).toBeDefined();
@@ -219,6 +238,22 @@ describe('SessionPage — toggling a reaction does not double-fetch reactions', 
       vi.fn(async (url: string, options?: { method?: string }) => {
         if (url.endsWith('/me')) {
           return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
+        }
+        if (url === `/api/sessions/${SESSION_ID}/bootstrap`) {
+          return {
+            ok: true,
+            json: async () => ({
+              name: null,
+              participants: [USER_1],
+              bufferPct: 0,
+              isochrones: [],
+              intersection: null,
+              areaKm2: null,
+              bufferedIntersection: null,
+              bufferedAreaKm2: null,
+              listings: [],
+            }),
+          };
         }
         if (url === `/api/sessions/${SESSION_ID}`) {
           return { ok: true, json: async () => ({ users: [USER_1], session: {} }) };
@@ -302,6 +337,22 @@ describe('SessionPage — loading households and users runs concurrently', () =>
         if (url.endsWith('/me')) {
           return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
         }
+        if (url === `/api/sessions/${SESSION_ID}/bootstrap`) {
+          return {
+            ok: true,
+            json: async () => ({
+              name: null,
+              participants: [USER_1],
+              bufferPct: 0,
+              isochrones: [],
+              intersection: null,
+              areaKm2: null,
+              bufferedIntersection: null,
+              bufferedAreaKm2: null,
+              listings: [],
+            }),
+          };
+        }
         if (url === HOUSEHOLDS_URL) {
           return trackOverlap(HOUSEHOLDS_URL, SESSION_URL, () => ({ households: [] }));
         }
@@ -340,15 +391,28 @@ describe('SessionPage — loading households and users runs concurrently', () =>
 });
 
 describe('SessionPage — passes the fetched session name to SessionHeader', () => {
-  it('threads session.name from the existing /api/sessions/:id fetch into SessionHeader, without a dedicated fetch', async () => {
+  it('threads name from the bootstrap payload into SessionHeader, without a dedicated fetch', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
         if (url.endsWith('/me')) {
           return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
         }
-        if (url === `/api/sessions/${SESSION_ID}`) {
-          return { ok: true, json: async () => ({ users: [USER_1], session: { name: 'My Hunt' } }) };
+        if (url === `/api/sessions/${SESSION_ID}/bootstrap`) {
+          return {
+            ok: true,
+            json: async () => ({
+              name: 'My Hunt',
+              participants: [USER_1],
+              bufferPct: 0,
+              isochrones: [],
+              intersection: null,
+              areaKm2: null,
+              bufferedIntersection: null,
+              bufferedAreaKm2: null,
+              listings: [],
+            }),
+          };
         }
         if (url === `/api/sessions/${SESSION_ID}/households`) {
           return { ok: true, json: async () => ({ households: [] }) };

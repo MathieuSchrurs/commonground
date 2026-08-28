@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
+import * as turf from '@turf/turf';
+import { Feature, MultiPolygon, Polygon } from 'geojson';
 import { PropertyListing } from './types';
 import { annotatePriceChanges, ExistingPriceRow } from './price-changes';
+import { dedupeAcrossSources } from './dedupe';
 
 // The scraper reads and writes the shared listing pool from server-side jobs
 // (the daily cron and /api/scrape). It uses the service-role key so RLS can't
@@ -224,18 +227,47 @@ function inBbox<Q extends { gte: (c: string, v: unknown) => Q; lte: (c: string, 
     .lte('latitude', maxLat);
 }
 
+// The columns the session map displays or filters on. Selecting them
+// explicitly (instead of *) keeps the /api/scrape and bootstrap payloads at
+// exactly what the client needs — and future fat columns (raw source
+// payloads, long descriptions) can never leak into them. scraped_at is
+// deliberately absent: freshness checks query it server-side, the client
+// never sees it.
+const LISTING_MAP_COLUMNS = [
+  'id',
+  'source',
+  'external_id',
+  'url',
+  'title',
+  'address',
+  'city',
+  'postal_code',
+  'latitude',
+  'longitude',
+  'price',
+  'previous_price',
+  'price_changed_at',
+  'property_type',
+  'bedrooms',
+  'surface_area',
+  'land_area',
+  'image_url',
+  'first_seen_at',
+  'location_precision',
+].join(', ');
+
 export async function fetchListingsInBbox(
   minLng: number,
   minLat: number,
   maxLng: number,
   maxLat: number
-): Promise<PropertyListing[]> {
+): Promise<Omit<PropertyListing, 'scraped_at'>[]> {
   const supabase = getClient();
-  const all: PropertyListing[] = [];
+  const all: Omit<PropertyListing, 'scraped_at'>[] = [];
 
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error } = await inBbox(
-      supabase.from('property_listings').select('*'),
+      supabase.from('property_listings').select(LISTING_MAP_COLUMNS),
       minLng, minLat, maxLng, maxLat
     )
       .not('latitude', 'is', null)
@@ -245,12 +277,57 @@ export async function fetchListingsInBbox(
 
     if (error) throw new Error(`Supabase fetch error: ${error.message}`);
 
-    const page = (data ?? []) as PropertyListing[];
+    const page = (data ?? []) as unknown as Omit<PropertyListing, 'scraped_at'>[];
     all.push(...page);
     if (page.length < PAGE_SIZE) break;
   }
 
   return all;
+}
+
+export interface ListingsInPolygonResult {
+  listings: Omit<PropertyListing, 'scraped_at'>[];
+  stats: { bboxListings: number; insidePolygon: number; mergedDuplicates: number };
+}
+
+/**
+ * Fetch stored listings inside a polygon — the exact query the session map
+ * runs, shared by /api/scrape and the session bootstrap route so both agree
+ * on what a listing "in the search area" means: bbox prefilter, point-in-
+ * polygon test, then cross-source dedupe.
+ */
+export async function fetchListingsInPolygon(
+  polygon: Feature<Polygon | MultiPolygon>
+): Promise<ListingsInPolygonResult> {
+  const [minLng, minLat, maxLng, maxLat] = turf.bbox(polygon);
+  const allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
+
+  const inside = allListings.filter((listing) => {
+    if (!listing.latitude || !listing.longitude) return false;
+    const point = turf.point([listing.longitude, listing.latitude]);
+    return turf.booleanPointInPolygon(point, polygon);
+  });
+
+  // Drop exact duplicates by (source, external_id) — should already be
+  // unique after upsert, but cheap belt-and-braces.
+  const seenKey = new Set<string>();
+  const uniquePerSource = inside.filter((l) => {
+    const k = `${l.source}:${l.external_id}`;
+    if (seenKey.has(k)) return false;
+    seenKey.add(k);
+    return true;
+  });
+
+  const { listings, merged } = dedupeAcrossSources(uniquePerSource);
+
+  return {
+    listings,
+    stats: {
+      bboxListings: allListings.length,
+      insidePolygon: uniquePerSource.length,
+      mergedDuplicates: merged,
+    },
+  };
 }
 
 /**
