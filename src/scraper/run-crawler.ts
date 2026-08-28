@@ -28,6 +28,7 @@ import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { computeIntersection, unionPolygons, bufferPolygon } from '../lib/geo';
 import { discoverAreas, Area } from './areas';
 import { refreshListingsForPolygon, RefreshOptions, SourceName } from './refresh';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
 
 type Mode = 'free' | 'zimmo' | 'all';
 
@@ -72,7 +73,7 @@ async function fetchIsochrone(
 ): Promise<Feature<Polygon | MultiPolygon> | null> {
   const token = process.env.MAPBOX_SECRET_TOKEN;
   const url = `https://api.mapbox.com/isochrone/v1/mapbox/${mode}/${lng},${lat}?contours_minutes=${minutes}&polygons=true&access_token=${token}`;
-  const res = await fetch(url).catch(() => null);
+  const res = await fetchWithTimeout(url, undefined, API_FETCH_TIMEOUT_MS).catch(() => null);
   if (!res?.ok) return null;
   const data = await res.json();
   return (data.features?.[0] as Feature<Polygon | MultiPolygon>) ?? null;

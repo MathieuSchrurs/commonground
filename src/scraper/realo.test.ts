@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { parseCards, parsePrice } from './realo';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseCards, parsePrice, scrapeRealo } from './realo';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from '../lib/http';
+
+vi.mock('../lib/http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/http')>();
+  return {
+    ...actual,
+    fetchWithTimeout: vi.fn(),
+  };
+});
 
 describe('parsePrice', () => {
   it('parses Belgian dot-separated thousands', () => {
@@ -55,5 +64,30 @@ describe('parseCards', () => {
 
     const [listing] = parseCards(html);
     expect(listing.property_type).toBe('commercial');
+  });
+});
+
+describe('scrapeRealo fetch timeout', () => {
+  const mockResponse = {
+    ok: true,
+    json: () => Promise.resolve({ data: { suggestions: [] } }),
+  } as unknown as Response;
+
+  beforeEach(() => {
+    vi.mocked(fetchWithTimeout).mockClear();
+    vi.mocked(fetchWithTimeout).mockResolvedValue(mockResponse);
+    // Guards against the pre-migration code path (raw `fetch`) succeeding
+    // silently and masking a missing fetchWithTimeout call.
+    vi.spyOn(global, 'fetch').mockResolvedValue(mockResponse);
+  });
+
+  it('uses the API fetch timeout for the search-suggest lookup', async () => {
+    await scrapeRealo([{ postalCode: '9000', city: 'Gent', citySlug: 'gent' }]);
+
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ headers: expect.anything() }),
+      API_FETCH_TIMEOUT_MS
+    );
   });
 });

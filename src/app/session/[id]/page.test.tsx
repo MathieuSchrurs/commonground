@@ -4,7 +4,7 @@ import { render, waitFor } from '@testing-library/react';
 
 // The server now computes an updated participant's isochrone once and
 // broadcasts it on `session_${sessionId}` (unit 2). This test is scoped to
-// whether the page (a) stops refetching the isochrone itself on a zone-changed
+// whether the page (a) stops refetching the isochrone itself on a constraint-changed
 // `postgres_changes` UPDATE, and (b) applies the broadcast payload to the map
 // instead. Every other card/component on the page is stubbed out.
 const channelRegistry: Record<
@@ -96,6 +96,14 @@ function minimalFeatureCollection(marker: string) {
 beforeEach(async () => {
   for (const key of Object.keys(channelRegistry)) delete channelRegistry[key];
   mapProps.current = null;
+  // The page snapshots the previous visit from localStorage in a mount
+  // effect; this jsdom environment doesn't expose it, so stub the surface
+  // the page uses.
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  });
   SessionPage = (await import('./page')).default;
 });
 

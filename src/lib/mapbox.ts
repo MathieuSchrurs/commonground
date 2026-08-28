@@ -1,6 +1,7 @@
 import mbxClient from '@mapbox/mapbox-sdk';
 import mbxGeocoding from '@mapbox/mapbox-sdk/services/geocoding';
 import { GeocodeResult, IsochroneRequest, IsochroneResponse } from '@/types/geo';
+import { API_FETCH_TIMEOUT_MS, fetchWithTimeout } from './http';
 
 const MAPBOX_ACCESS_TOKEN = process.env.MAPBOX_SECRET_TOKEN;
 
@@ -120,14 +121,15 @@ async function fetchIsochrone(
   mode: 'driving' | 'cycling'
 ): Promise<IsochroneResponse> {
   try {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `https://api.mapbox.com/isochrone/v1/mapbox/${mode}/${lng},${lat}?contours_minutes=${minutes}&polygons=true&access_token=${MAPBOX_ACCESS_TOKEN}`,
       {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
-      }
+      },
+      API_FETCH_TIMEOUT_MS
     );
 
     if (!response.ok) {

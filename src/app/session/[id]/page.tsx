@@ -395,8 +395,8 @@ export default function SessionPage() {
             setIsochrones(updatedIsochrones);
             await computeAndSetIntersection(updatedIsochrones);
           } else {
-            // The server broadcasts the recomputed isochrone for a zone
-            // change (isochrone-update, below) — this just keeps `users` in
+            // The server broadcasts the recomputed isochrone for a commute
+            // constraint change (isochrone-update, below) — this just keeps `users` in
             // step so name/address/etc. stay current.
             const idx = usersRef.current.findIndex(u => u.id === constraint.id);
             if (idx === -1) return;
