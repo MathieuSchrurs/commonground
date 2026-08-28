@@ -138,7 +138,10 @@ _Avoid_: shortlist item, pick, bookmark.
 
 **Unanimous**:
 Every household is _yes_ on a listing and none is _silent_ — the strongest
-signal the hunt can produce, and deliberately rare.
+signal the hunt can produce, and deliberately rare. Exception: a household
+that hides commercial listings entirely (every participant, see ADR 0004) is
+excluded from this check for commercial listings specifically, since it can
+never react to one — it does not count as the silence that blocks Unanimous.
 _Avoid_: consensus, everyone, full house.
 
 **Contested listing**:
