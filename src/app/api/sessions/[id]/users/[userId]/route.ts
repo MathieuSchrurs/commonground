@@ -9,14 +9,7 @@ export const PUT = route(async (req, { params }: Ctx) => {
   const { id: sessionId, userId } = await params;
   const input = await req.json();
   const updated = await updateUser(sessionId, userId, input);
-  // The constraint update already succeeded and is durable; a broadcast
-  // failure (including getIsochrone rejecting) must not turn this into an
-  // error response.
-  try {
-    await broadcastIsochroneUpdate(sessionId, updated);
-  } catch {
-    // best-effort; swallow
-  }
+  await broadcastIsochroneUpdate(sessionId, updated);
   return updated;
 });
 

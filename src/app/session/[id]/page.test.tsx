@@ -70,6 +70,15 @@ const USER_1 = {
   maxMinutes: 30,
   transportMode: 'driving',
 };
+const USER_2 = {
+  id: 'u2',
+  name: 'Bram',
+  address: 'Vrijdagmarkt 1, Gent',
+  latitude: 51.06,
+  longitude: 3.73,
+  maxMinutes: 45,
+  transportMode: 'cycling',
+};
 
 function minimalFeatureCollection(marker: string) {
   return {
@@ -109,7 +118,7 @@ describe('SessionPage — isochrone updates arrive via broadcast, not client ref
           return { ok: true, json: async () => ({ participant: { id: 'me' } }) };
         }
         if (url === `/api/sessions/${SESSION_ID}`) {
-          return { ok: true, json: async () => ({ users: [USER_1], session: {} }) };
+          return { ok: true, json: async () => ({ users: [USER_1, USER_2], session: {} }) };
         }
         if (url === '/api/isochrone') {
           return isochroneSpy();
@@ -125,11 +134,11 @@ describe('SessionPage — isochrone updates arrive via broadcast, not client ref
 
     await waitFor(() => {
       expect(mapProps.current?.isochrones).toBeDefined();
-      expect((mapProps.current!.isochrones as unknown[]).length).toBe(1);
+      expect((mapProps.current!.isochrones as unknown[]).length).toBe(2);
     });
 
     const callsBefore = isochroneSpy.mock.calls.length;
-    expect(callsBefore).toBe(1);
+    expect(callsBefore).toBe(2);
 
     const channel = channelRegistry[`session_${SESSION_ID}`];
     expect(channel?.postgresChanges).toBeDefined();
@@ -169,5 +178,10 @@ describe('SessionPage — isochrone updates arrive via broadcast, not client ref
       const isochrones = mapProps.current!.isochrones as Array<{ properties?: { marker?: string } }>;
       expect(isochrones[0]?.properties?.marker).toBe('from-broadcast');
     });
+    // u2 (index 1) never appeared in the broadcast payload — asserting it's
+    // untouched rules out an implementation that just overwrites index 0
+    // rather than matching by userId.
+    const isochrones = mapProps.current!.isochrones as Array<{ properties?: { marker?: string } }>;
+    expect(isochrones[1]?.properties?.marker).toBe('initial');
   });
 });
