@@ -85,6 +85,7 @@ describe('GET /api/sessions/[id]/bootstrap', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({
+      name: 'Home hunt',
       bufferPct: 10,
       participants: [CONSTRAINT],
       isochrones: [feature('u1')],

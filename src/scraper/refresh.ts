@@ -5,9 +5,9 @@ import { scrapeImmoweb } from './immoweb';
 import { scrapeZimmo } from './zimmo';
 import { scrapeImmovlan } from './immovlan';
 import { scrapeImmoscoop } from './immoscoop';
-import { geocodeAddress } from './geocode';
+import { geocodeAddress, GeocodedPoint } from './geocode';
 import { discoverAreas, Area } from './areas';
-import { upsertListings, deleteStaleListings, fetchKnownLocations } from './db';
+import { upsertListings, deleteStaleListings, fetchKnownLocations, KnownLocation } from './db';
 import { PropertyListing } from './types';
 
 type ScrapeResult = { listings: PropertyListing[]; blocked: boolean };
@@ -57,6 +57,118 @@ export interface RefreshSummary {
   upserted: number;
   geocodedWithCoords: number;
   geocodedWithoutCoords: number;
+}
+
+/**
+ * Resolve coordinates for a batch of scraped listings, cheapest path first:
+ *  1. coordinates straight from the source (Immoweb payload, Zimmo JSON-LD)
+ *     never need a known-location lookup or a geocode call.
+ *  2. coordinates stored on a previous refresh (no Mapbox call at all).
+ *  3. fresh geocode — rate-limited in batches of 10 with a pause between
+ *     batches, because Mapbox allows 600 req/min and a naive parallel burst
+ *     of hundreds gets 429s that silently strand listings without
+ *     coordinates. Identical query strings within one call are geocoded once
+ *     and shared, since duplicate listings across sources routinely produce
+ *     the same address.
+ */
+export async function resolveLocations(
+  combined: PropertyListing[],
+  deps: {
+    fetchKnown: (listings: PropertyListing[]) => Promise<Map<string, KnownLocation>>;
+    geocode: (query: string) => Promise<GeocodedPoint | null>;
+  }
+): Promise<PropertyListing[]> {
+  const located: PropertyListing[] = [];
+  const needKnownLookup: PropertyListing[] = [];
+  for (const listing of combined) {
+    if (listing.latitude && listing.longitude) {
+      located.push({ ...listing, location_precision: 'exact' });
+      continue;
+    }
+    needKnownLookup.push(listing);
+  }
+
+  const known = await deps.fetchKnown(needKnownLookup);
+
+  const needGeocode: PropertyListing[] = [];
+  for (const listing of needKnownLookup) {
+    const prior = known.get(`${listing.source}:${listing.external_id}`);
+    if (prior) {
+      located.push({
+        ...listing,
+        latitude: prior.latitude,
+        longitude: prior.longitude,
+        location_precision: prior.location_precision ?? undefined,
+      });
+      continue;
+    }
+    needGeocode.push(listing);
+  }
+
+  console.log(`[refresh] Locations: ${located.length} known, ${needGeocode.length} to geocode`);
+
+  // Memoized per call — addresses can genuinely change between refreshes, so
+  // this must not survive past this one resolveLocations invocation.
+  const geocodeCache = new Map<string, Promise<GeocodedPoint | null>>();
+  const geocodeMemoized = (query: string): Promise<GeocodedPoint | null> => {
+    const cached = geocodeCache.get(query);
+    if (cached) return cached;
+    const promise = deps.geocode(query).catch(() => null);
+    geocodeCache.set(query, promise);
+    return promise;
+  };
+
+  // Batches of 10 with a 1.1s pause ≈ max 540 req/min, under Mapbox's 600
+  const GEOCODE_BATCH = 10;
+  for (let i = 0; i < needGeocode.length; i += GEOCODE_BATCH) {
+    const batch = needGeocode.slice(i, i + GEOCODE_BATCH);
+    const results = await Promise.all(
+      batch.map(async (listing): Promise<PropertyListing> => {
+        const query = listing.address
+          ? `${listing.address}, Belgium`
+          : [listing.postal_code, listing.city, 'Belgium'].filter(Boolean).join(', ');
+        if (!query.trim()) return listing;
+        const geo = await geocodeMemoized(query);
+        if (!geo) return listing;
+        return {
+          ...listing,
+          latitude: geo.latitude,
+          longitude: geo.longitude,
+          location_precision: geo.precision,
+        };
+      })
+    );
+    located.push(...results);
+    if (i + GEOCODE_BATCH < needGeocode.length) await new Promise(r => setTimeout(r, 1100));
+  }
+
+  return located;
+}
+
+/**
+ * Delete stale listings for every eligible source concurrently. A source is
+ * eligible when this run actually returned listings for it and it wasn't
+ * blocked — a temporary block or an empty result must not be read as "nothing
+ * left, purge it all". Each source's delete is independent (different
+ * `source` filter, same bbox/cutoff), so there is nothing to sequence.
+ */
+export async function purgeStaleListings(
+  sources: { name: string; listings: PropertyListing[]; blocked: boolean }[],
+  bbox: { minLng: number; minLat: number; maxLng: number; maxLat: number },
+  cutoff: string,
+  deleteFn: (
+    source: string,
+    minLng: number,
+    minLat: number,
+    maxLng: number,
+    maxLat: number,
+    cutoff: string
+  ) => Promise<void> = deleteStaleListings
+): Promise<void> {
+  const eligible = sources.filter(s => s.listings.length > 0 && !s.blocked);
+  await Promise.all(
+    eligible.map(s => deleteFn(s.name, bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat, cutoff))
+  );
 }
 
 /**
@@ -114,60 +226,8 @@ export async function refreshListingsForPolygon(
     console.log(`[refresh] ${s.name}: ${s.listings.length} listings${s.blocked ? ' (BLOCKED)' : ''}`);
   });
 
-  // Locate every listing, cheapest path first:
-  //  1. coordinates straight from the source (Immoweb payload, Zimmo JSON-LD)
-  //  2. coordinates we stored on a previous refresh (no Mapbox call at all)
-  //  3. fresh geocode — rate-limited, because Mapbox allows 600 req/min and a
-  //     naive parallel burst of hundreds gets 429s that silently strand
-  //     listings without coordinates.
   const combined = sources.flatMap(s => s.listings);
-  const known = await fetchKnownLocations(combined);
-
-  const located: PropertyListing[] = [];
-  const needGeocode: PropertyListing[] = [];
-  for (const listing of combined) {
-    if (listing.latitude && listing.longitude) {
-      located.push({ ...listing, location_precision: 'exact' });
-      continue;
-    }
-    const prior = known.get(`${listing.source}:${listing.external_id}`);
-    if (prior) {
-      located.push({
-        ...listing,
-        latitude: prior.latitude,
-        longitude: prior.longitude,
-        location_precision: prior.location_precision ?? undefined,
-      });
-      continue;
-    }
-    needGeocode.push(listing);
-  }
-
-  console.log(`[refresh] Locations: ${located.length} known, ${needGeocode.length} to geocode`);
-
-  // Batches of 10 with a 1.1s pause ≈ max 540 req/min, under Mapbox's 600
-  const GEOCODE_BATCH = 10;
-  for (let i = 0; i < needGeocode.length; i += GEOCODE_BATCH) {
-    const batch = needGeocode.slice(i, i + GEOCODE_BATCH);
-    const results = await Promise.all(
-      batch.map(async (listing): Promise<PropertyListing> => {
-        const query = listing.address
-          ? `${listing.address}, Belgium`
-          : [listing.postal_code, listing.city, 'Belgium'].filter(Boolean).join(', ');
-        if (!query.trim()) return listing;
-        const geo = await geocodeAddress(query).catch(() => null);
-        if (!geo) return listing;
-        return {
-          ...listing,
-          latitude: geo.latitude,
-          longitude: geo.longitude,
-          location_precision: geo.precision,
-        };
-      })
-    );
-    located.push(...results);
-    if (i + GEOCODE_BATCH < needGeocode.length) await new Promise(r => setTimeout(r, 1100));
-  }
+  const located = await resolveLocations(combined, { fetchKnown: fetchKnownLocations, geocode: geocodeAddress });
 
   // Stamp scraped_at so stale detection can purge long-unseen rows
   const geocoded = located.map(l => ({ ...l, scraped_at: scrapeStartedAt }));
@@ -181,11 +241,7 @@ export async function refreshListingsForPolygon(
     // Purge listings unseen for a week — and only for sources that returned a
     // non-empty, non-blocked result, so a temporary block can't wipe data.
     const staleCutoff = new Date(Date.now() - STALE_AFTER_MS).toISOString();
-    for (const src of sources) {
-      if (src.listings.length > 0 && !src.blocked) {
-        await deleteStaleListings(src.name, minLng, minLat, maxLng, maxLat, staleCutoff);
-      }
-    }
+    await purgeStaleListings(sources, { minLng, minLat, maxLng, maxLat }, staleCutoff);
     console.log('[refresh] Stale (1w+ unseen) listings purged for successful sources');
   }
 

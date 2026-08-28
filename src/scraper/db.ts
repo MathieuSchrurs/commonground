@@ -75,16 +75,21 @@ export async function upsertListings(listings: PropertyListing[]): Promise<Prope
     bySource.set(l.source, ids);
   }
   const existing: ExistingPriceRow[] = [];
+  const priceLookups: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>[] = [];
   for (const [source, externalIds] of bySource) {
     for (const ids of chunk(externalIds, IN_CHUNK_SIZE)) {
-      const { data, error } = await supabase
-        .from('property_listings')
-        .select('id, source, external_id, price, previous_price, price_changed_at')
-        .eq('source', source)
-        .in('external_id', ids);
-      if (error) throw new Error(`Supabase price lookup error: ${error.message}`);
-      existing.push(...((data ?? []) as ExistingPriceRow[]));
+      priceLookups.push(
+        supabase
+          .from('property_listings')
+          .select('id, source, external_id, price, previous_price, price_changed_at')
+          .eq('source', source)
+          .in('external_id', ids)
+      );
     }
+  }
+  for (const { data, error } of await Promise.all(priceLookups)) {
+    if (error) throw new Error(`Supabase price lookup error: ${error.message}`);
+    existing.push(...((data ?? []) as ExistingPriceRow[]));
   }
 
   const { upserts, history } = annotatePriceChanges(deduped, existing);
@@ -140,23 +145,28 @@ export async function fetchKnownLocations(
     bySource.set(l.source, ids);
   }
 
+  const locationLookups: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>[] = [];
   for (const [source, externalIds] of bySource) {
     for (const ids of chunk(externalIds, IN_CHUNK_SIZE)) {
-      const { data, error } = await supabase
-        .from('property_listings')
-        .select('source, external_id, latitude, longitude, location_precision')
-        .eq('source', source)
-        .in('external_id', ids)
-        .not('latitude', 'is', null)
-        .not('longitude', 'is', null);
-      if (error) throw new Error(`Supabase location lookup error: ${error.message}`);
-      for (const row of (data ?? []) as Array<{ source: string; external_id: string } & KnownLocation>) {
-        known.set(`${row.source}:${row.external_id}`, {
-          latitude: Number(row.latitude),
-          longitude: Number(row.longitude),
-          location_precision: row.location_precision,
-        });
-      }
+      locationLookups.push(
+        supabase
+          .from('property_listings')
+          .select('source, external_id, latitude, longitude, location_precision')
+          .eq('source', source)
+          .in('external_id', ids)
+          .not('latitude', 'is', null)
+          .not('longitude', 'is', null)
+      );
+    }
+  }
+  for (const { data, error } of await Promise.all(locationLookups)) {
+    if (error) throw new Error(`Supabase location lookup error: ${error.message}`);
+    for (const row of (data ?? []) as Array<{ source: string; external_id: string } & KnownLocation>) {
+      known.set(`${row.source}:${row.external_id}`, {
+        latitude: Number(row.latitude),
+        longitude: Number(row.longitude),
+        location_precision: row.location_precision,
+      });
     }
   }
 

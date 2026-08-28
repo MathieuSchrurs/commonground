@@ -9,8 +9,9 @@ import { render, waitFor } from '@testing-library/react';
 // found (a participant hiding commercial listings still saw them in the
 // file-attachment picker). Every card is stubbed to a prop-capturing spy so
 // none of their own rendering/fetching is exercised here.
-const { sharedFilesCardProps } = vi.hoisted(() => ({
+const { sharedFilesCardProps, sessionHeaderProps } = vi.hoisted(() => ({
   sharedFilesCardProps: { current: null as null | Record<string, unknown> },
+  sessionHeaderProps: { current: null as null | Record<string, unknown> },
 }));
 
 vi.mock('next/navigation', () => ({
@@ -30,7 +31,12 @@ vi.mock('@/utils/supabase/client', () => {
   };
 });
 
-vi.mock('@/components/SessionHeader', () => ({ default: () => null }));
+vi.mock('@/components/SessionHeader', () => ({
+  default: (props: Record<string, unknown>) => {
+    sessionHeaderProps.current = props;
+    return null;
+  },
+}));
 vi.mock('@/components/dashboard/NextMeetingCard', () => ({ default: () => null }));
 vi.mock('@/components/dashboard/GroupFavoritesCard', () => ({ default: () => null }));
 vi.mock('@/components/dashboard/SplitVotesCard', () => ({ default: () => null }));
@@ -48,6 +54,7 @@ let DashboardPage: typeof import('./page').default;
 
 beforeEach(async () => {
   sharedFilesCardProps.current = null;
+  sessionHeaderProps.current = null;
   DashboardPage = (await import('./page')).default;
 });
 
@@ -99,5 +106,21 @@ describe('DashboardPage — houseOptions respects the hide-commercial preference
     const houseOptions = sharedFilesCardProps.current!.houseOptions as { id: string }[];
 
     expect(houseOptions.map((h) => h.id)).toEqual(['office-1']);
+  });
+});
+
+describe('DashboardPage — passes the fetched session name to SessionHeader', () => {
+  it('threads session.name from the existing /api/sessions/:id fetch into SessionHeader, without a dedicated fetch', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/me')) return jsonResponse({ participant: { id: 'me' } });
+      if (url.endsWith('/convergence')) return jsonResponse({ engaged: [], considered: [], favorites: [], contested: [] });
+      if (url === '/api/sessions/session-1') return jsonResponse({ users: [], session: { name: 'My Hunt' } });
+      return jsonResponse({});
+    }));
+
+    render(<DashboardPage />);
+
+    await waitFor(() => expect(sessionHeaderProps.current?.name).toBe('My Hunt'));
+    expect(sessionHeaderProps.current?.sessionId).toBe('session-1');
   });
 });

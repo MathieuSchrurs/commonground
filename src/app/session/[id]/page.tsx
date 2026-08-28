@@ -17,7 +17,7 @@ import SessionHeader from '@/components/SessionHeader';
 import ShortlistPanel from '@/components/ShortlistPanel';
 import HouseholdsCard from '@/components/HouseholdsCard';
 import { Household } from '@/types/household';
-import { computeConvergence } from '@/lib/convergence';
+import { computeConvergence, Convergence } from '@/lib/convergence';
 import { Button } from '@/components/ui/button';
 import { toCommuteConstraint, SessionUserRow } from '@/lib/session/mappers';
 
@@ -82,6 +82,7 @@ export default function SessionPage() {
   const [reactions, setReactions] = useState<ListingReaction[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [newListingKeys, setNewListingKeys] = useState<Set<string>>(new Set());
+  const [sessionName, setSessionName] = useState<string | null>(null);
 
   // Refs so the realtime callback always sees current state without stale closures
   const usersRef = useRef<CommuteConstraint[]>([]);
@@ -147,8 +148,12 @@ export default function SessionPage() {
   }, [sessionId]);
 
   const loadUsersAndHouseholds = useCallback(async () => {
-    await loadHouseholds();
-    const res = await fetch(`/api/sessions/${sessionId}`);
+    // loadHouseholds() and this fetch are independent — running them
+    // concurrently avoids paying for both round trips in sequence.
+    const [, res] = await Promise.all([
+      loadHouseholds(),
+      fetch(`/api/sessions/${sessionId}`),
+    ]);
     if (!res.ok) return;
     const { users: fresh } = (await res.json()) as { users: CommuteConstraint[] };
     // globalThis.Map — `Map` in this module is the map component.
@@ -162,17 +167,22 @@ export default function SessionPage() {
 
   useEffect(() => { loadHouseholds(); }, [loadHouseholds]);
 
+  // Computed once here and threaded to both the map (via unanimousListingIds)
+  // and ShortlistPanel (via convergence), so the two surfaces read the same
+  // result instead of each recomputing it from the same inputs.
+  const convergence: Convergence = useMemo(() => computeConvergence({
+    listings: properties,
+    reactions,
+    participants: users,
+    households,
+  }), [properties, reactions, users, households]);
+
   // Which listings every household is yes on. Derived from convergence so the
   // pin glow, the shortlist and the dashboard can never disagree.
-  const unanimousListingIds = useMemo(() => {
-    const { favorites } = computeConvergence({
-      listings: properties,
-      reactions,
-      participants: users,
-      households,
-    });
-    return new Set(favorites.filter((f) => f.unanimous).map((f) => f.listing.id!));
-  }, [properties, reactions, users, households]);
+  const unanimousListingIds = useMemo(
+    () => new Set(convergence.favorites.filter((f) => f.unanimous).map((f) => f.listing.id!)),
+    [convergence]
+  );
 
   // Votes from the others land live; refetching the whole (tiny) set is
   // simpler and safer than patching state from realtime payloads
@@ -191,16 +201,19 @@ export default function SessionPage() {
   const handleToggleReaction = useCallback(async (listingId: string, reaction: ReactionKind) => {
     if (!myUserId) return;
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/reactions`, {
+      await fetch(`/api/sessions/${sessionId}/reactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ listingId, userId: myUserId, reaction }),
       });
-      if (res.ok) loadReactions();
+      // Don't refetch here — the write lands in listing_reactions, and the
+      // realtime subscription above echoes it back, which refetches once.
+      // Calling loadReactions() here too raced that echo and doubled the
+      // fetch for a single toggle.
     } catch {
       // Realtime will reconcile on the next event
     }
-  }, [sessionId, myUserId, loadReactions]);
+  }, [sessionId, myUserId]);
 
   // Fetch isochrone for a user
   const fetchIsochrone = useCallback(async (user: CommuteConstraint) => {
@@ -289,12 +302,14 @@ export default function SessionPage() {
         }
 
         const data = await response.json() as IntersectionResult & {
+          name: string | null;
           participants: CommuteConstraint[];
           bufferPct: number;
           isochrones: Feature<Polygon | MultiPolygon>[];
           listings: PropertyListing[];
         };
         setUsers(data.participants);
+        setSessionName(data.name);
 
         // The persisted search buffer (if any) extends the common ground from
         // the start. The server clamps it to the slider range already; the
@@ -679,7 +694,7 @@ export default function SessionPage() {
     // Desktop: lock to viewport height so the map always fills to the bottom
     // and the sidebar scrolls internally. Mobile keeps normal page scrolling.
     <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-background flex flex-col">
-      <SessionHeader sessionId={sessionId} />
+      <SessionHeader sessionId={sessionId} name={sessionName} />
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0">
         <aside className="border-r border-border overflow-y-auto p-4 space-y-4 bg-muted/20 min-h-0">
@@ -698,10 +713,8 @@ export default function SessionPage() {
             isLoading={isLoading}
           />
           <ShortlistPanel
-            properties={properties}
-            reactions={reactions}
             users={users}
-            households={households}
+            convergence={convergence}
             myUserId={myUserId}
           />
           <HouseholdsCard

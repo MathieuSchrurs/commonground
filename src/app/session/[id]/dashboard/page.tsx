@@ -47,6 +47,7 @@ export default function DashboardPage() {
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [myHouseholdId, setMyHouseholdId] = useState<string | null>(null);
   const [myHideCommercial, setMyHideCommercial] = useState<boolean>(true);
+  const [sessionName, setSessionName] = useState<string | null>(null);
 
   // "Who am I" is the participant linked to the signed-in account. Re-read
   // whenever pairing changes: being put into a household changes which unit id
@@ -79,6 +80,7 @@ export default function DashboardPage() {
     if (res.ok) {
       const data = await res.json();
       setUsers((data.users ?? []).map((u: SessionUser) => ({ id: u.id, name: u.name })));
+      setSessionName(data.session?.name ?? null);
     }
   }, [sessionId]);
 
@@ -239,7 +241,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <SessionHeader sessionId={sessionId} />
+      <SessionHeader sessionId={sessionId} name={sessionName} />
 
       {/* max-w-[1600px] rather than a bigger Tailwind step: it's comfortably
           wider than a 14" MacBook Pro's 1512px logical viewport (the most

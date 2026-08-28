@@ -45,6 +45,7 @@ export const GET = route(async (_req, { params }: Ctx) => {
     : [];
 
   return {
+    name: session.name,
     bufferPct,
     participants,
     isochrones,

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ShareLink from '@/components/ShareLink';
@@ -8,28 +8,16 @@ import { Logo } from '@/components/Logo';
 
 interface SessionHeaderProps {
   sessionId: string;
+  name: string | null;
 }
 
 // Shared top bar for every page within a session: brand, the Map | Dashboard
 // tabs, and the share link. Both tabs keep the same session id and identity.
-export default function SessionHeader({ sessionId }: SessionHeaderProps) {
+// The name is passed in rather than fetched here: both call sites already
+// fetch `/api/sessions/:id` for their own purposes and have it on hand.
+export default function SessionHeader({ sessionId, name }: SessionHeaderProps) {
   const pathname = usePathname();
   const onDashboard = pathname?.endsWith('/dashboard') ?? false;
-
-  // Show the hunt's name in the bar (falls back to the short id while loading).
-  const [name, setName] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    fetch(`/api/sessions/${sessionId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (active && d?.session) setName(d.session.name ?? null);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [sessionId]);
 
   const tabs = [
     { label: 'Map', href: `/session/${sessionId}`, active: !onDashboard },
