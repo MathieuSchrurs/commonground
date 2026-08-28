@@ -104,6 +104,11 @@ One scraper input (Realo, Immoweb, Immovlan, ImmoScoop, Zimmo). A replaceable
 provider of listings.
 _Avoid_: scraper (the code), site, provider.
 
+**Property type**:
+What kind of building a listing is — house, apartment, land, or commercial —
+determined from the source's own raw listing data at scrape time.
+_Avoid_: category, use, zoning, class.
+
 ### Converging
 
 **Reaction**:
