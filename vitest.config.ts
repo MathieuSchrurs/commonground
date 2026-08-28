@@ -13,11 +13,15 @@ export default defineConfig({
   test: {
     // Only our own tests. `.opencode/` and `.fallow/` carry their own vendored
     // node_modules with thousands of upstream test files in them.
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     exclude: ['**/node_modules/**', '.next/**', '.opencode/**', '.fallow/**'],
-    // Everything under test today is pure logic — parsers, geo maths, folder
-    // trees, the RLS ratchet. No DOM needed, and node is much faster to boot.
+    // Pure logic (parsers, geo maths, folder trees, the RLS ratchet) stays on
+    // node — no DOM needed there, and node is much faster to boot. Component
+    // tests (.test.tsx) opt into jsdom individually via a leading
+    // `// @vitest-environment jsdom` comment in the file, rather than paying
+    // jsdom's boot cost for every test in the suite.
     environment: 'node',
+    setupFiles: ['./vitest.setup.ts'],
     reporters: process.env.CI ? ['default', 'github-actions'] : ['default'],
   },
 });
