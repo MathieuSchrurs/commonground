@@ -99,6 +99,9 @@ async function fetchHtml(label: string, url: string, proxied = false): Promise<F
 // calls already in flight are left to resolve and are still included — this
 // is the "break on blocked" shape several per-source scrape loops use, made
 // reusable and concurrent instead of strictly sequential.
+// When `stopWhen` fires, items never dispatched leave a hole (`undefined`) at
+// their index rather than a placeholder — callers using `stopWhen` must guard
+// against that when iterating the result.
 export function runWithConcurrency<T, R>(
   items: T[],
   concurrency: number,

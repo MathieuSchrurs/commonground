@@ -4,7 +4,6 @@ import * as turf from '@turf/turf';
 import { refreshListingsForPolygon } from '@/scraper/refresh';
 import { dedupeAcrossSources } from '@/scraper/dedupe';
 import { fetchListingsInBbox, hasFreshListingsInBbox } from '@/scraper/db';
-import { PropertyListing } from '@/scraper/types';
 
 // Three scrapers in parallel + geocoding pushes past the old 60s ceiling
 export const maxDuration = 120;
@@ -38,14 +37,10 @@ export async function POST(req: NextRequest) {
     debug.cacheOnly = cacheOnly;
     console.log(`[/api/scrape] Cache: fresh=${hasRecentData}, force=${force}, cacheOnly=${cacheOnly}`);
 
-    let allListings: PropertyListing[];
-
     if (!cacheOnly && (force || !hasRecentData)) {
       debug.refresh = await refreshListingsForPolygon(polygon);
-      allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
-    } else {
-      allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
     }
+    const allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
     debug.cachedListings = allListings.length;
 
     // Polygon filter (bbox is a superset of the polygon)

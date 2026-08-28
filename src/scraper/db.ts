@@ -190,6 +190,22 @@ export async function deleteStaleListings(
  */
 const PAGE_SIZE = 1000;
 
+// Shared by every bbox query below — a listing "is in the bbox" the same way
+// no matter which columns the caller wants back.
+function inBbox<Q extends { gte: (c: string, v: unknown) => Q; lte: (c: string, v: unknown) => Q }>(
+  query: Q,
+  minLng: number,
+  minLat: number,
+  maxLng: number,
+  maxLat: number
+): Q {
+  return query
+    .gte('longitude', minLng)
+    .lte('longitude', maxLng)
+    .gte('latitude', minLat)
+    .lte('latitude', maxLat);
+}
+
 export async function fetchListingsInBbox(
   minLng: number,
   minLat: number,
@@ -200,13 +216,10 @@ export async function fetchListingsInBbox(
   const all: PropertyListing[] = [];
 
   for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from('property_listings')
-      .select('*')
-      .gte('longitude', minLng)
-      .lte('longitude', maxLng)
-      .gte('latitude', minLat)
-      .lte('latitude', maxLat)
+    const { data, error } = await inBbox(
+      supabase.from('property_listings').select('*'),
+      minLng, minLat, maxLng, maxLat
+    )
       .not('latitude', 'is', null)
       .not('longitude', 'is', null)
       .order('id', { ascending: true })
@@ -236,13 +249,10 @@ export async function hasFreshListingsInBbox(
   cutoff: string
 ): Promise<boolean> {
   const supabase = getClient();
-  const { data, error } = await supabase
-    .from('property_listings')
-    .select('id')
-    .gte('longitude', minLng)
-    .lte('longitude', maxLng)
-    .gte('latitude', minLat)
-    .lte('latitude', maxLat)
+  const { data, error } = await inBbox(
+    supabase.from('property_listings').select('id'),
+    minLng, minLat, maxLng, maxLat
+  )
     .gte('scraped_at', cutoff)
     .limit(1);
 
@@ -267,13 +277,10 @@ export async function fetchNewListingsInBbox(
   const all: { id: string; latitude: number; longitude: number }[] = [];
 
   for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from('property_listings')
-      .select('id, latitude, longitude')
-      .gte('longitude', minLng)
-      .lte('longitude', maxLng)
-      .gte('latitude', minLat)
-      .lte('latitude', maxLat)
+    const { data, error } = await inBbox(
+      supabase.from('property_listings').select('id, latitude, longitude'),
+      minLng, minLat, maxLng, maxLat
+    )
       .not('latitude', 'is', null)
       .not('longitude', 'is', null)
       .gte('first_seen_at', since)
