@@ -16,7 +16,6 @@ import { depthOf, MAX_FOLDER_DEPTH } from '@/lib/folders';
 import { PropertyListing } from '@/scraper/types';
 import { ListingReaction, ReactionKind } from '@/types/reactions';
 import { Invalid, NotFound } from './errors';
-import { resolveToggle } from './reactions';
 import { SessionUserRow, toCommuteConstraint } from './mappers';
 
 const REACTION_KINDS: ReactionKind[] = ['love', 'object'];
@@ -507,42 +506,17 @@ export async function toggleReaction(
   if (!REACTION_KINDS.includes(reaction)) throw new Invalid('reaction must be love or object');
 
   const db = await createClient();
-  const { data: existing, error: fetchError } = await db
-    .from('listing_reactions')
-    .select('*')
-    .eq('session_id', sessionId)
-    .eq('listing_id', listingId)
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (fetchError) throw fetchError;
-
-  const current = (existing as { reaction: ReactionKind } | null)?.reaction ?? null;
-  const outcome = resolveToggle(current, reaction);
-
-  if (outcome.action === 'remove') {
-    const { error } = await db
-      .from('listing_reactions')
-      .delete()
-      .eq('id', (existing as unknown as { id: string }).id);
-    if (error) throw error;
-    return null;
-  }
-
-  const { data, error } = await db
-    .from('listing_reactions')
-    .upsert(
-      [{
-        session_id: sessionId,
-        listing_id: listingId,
-        user_id: userId,
-        reaction: outcome.reaction,
-      } as never],
-      { onConflict: 'session_id,listing_id,user_id' },
-    )
-    .select()
-    .single();
+  const { data, error } = await db.rpc('toggle_reaction', {
+    p_session_id: sessionId,
+    p_listing_id: listingId,
+    p_user_id: userId,
+    p_reaction: reaction,
+  } as never);
   if (error) throw error;
-  return data as unknown as ListingReaction;
+
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return row as unknown as ListingReaction;
 }
 
 // ---------------------------------------------------------------------------
