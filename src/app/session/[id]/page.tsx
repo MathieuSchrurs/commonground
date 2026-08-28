@@ -273,9 +273,12 @@ export default function SessionPage() {
       try {
         setIsLoading(true);
 
-        // Fetch session data
-        const response = await fetch(`/api/sessions/${sessionId}`);
-        
+        // One round trip for the whole first paint. The chain session →
+        // isochrones → common ground → listings is strictly dependent, so it
+        // used to be four client-orchestrated serial fetches; the server now
+        // resolves the entire chain in a single bootstrap request.
+        const response = await fetch(`/api/sessions/${sessionId}/bootstrap`);
+
         if (!response.ok) {
           if (response.status === 404) {
             setError('Session not found');
@@ -284,28 +287,33 @@ export default function SessionPage() {
           throw new Error('Failed to load session');
         }
 
-        // The store returns participants already as CommuteConstraints.
-        const { users: constraints, session } = await response.json() as {
-          users: CommuteConstraint[];
-          session?: { search_buffer_pct?: number };
+        const data = await response.json() as {
+          participants: CommuteConstraint[];
+          bufferPct: number;
+          isochrones: Feature<Polygon | MultiPolygon>[];
+          intersection: Feature<Polygon | MultiPolygon> | null;
+          areaKm2: number | null;
+          bufferedIntersection: Feature<Polygon | MultiPolygon> | null;
+          bufferedAreaKm2: number | null;
+          listings: PropertyListing[];
         };
-        setUsers(constraints);
+        setUsers(data.participants);
 
-        // The persisted search buffer (if any) extends the zone from the start.
-        const buffer = Math.max(0, Math.min(15, session?.search_buffer_pct ?? 0));
+        // The persisted search buffer (if any) extends the common ground from
+        // the start. The server clamps it to the slider range already; the
+        // client clamp keeps the slider and the geometry in lockstep even if
+        // a stale payload slips through.
+        const buffer = Math.max(0, Math.min(15, data.bufferPct ?? 0));
         setBufferPct(buffer);
 
-        // Fetch isochrones for all users
-        const isochronePromises = constraints.map(fetchIsochrone);
-        const isochroneData = await Promise.all(isochronePromises);
-        setIsochrones(isochroneData);
+        setIsochrones(data.isochrones);
+        if (data.isochrones.length > 0) {
+          setIntersection(data.bufferedIntersection ?? data.intersection);
+          setIntersectionArea(data.bufferedAreaKm2 ?? data.areaKm2);
+        }
 
-        // Compute intersection (buffered by the session's search buffer)
-        if (isochroneData.length > 0) {
-          const { intersection: newIntersection, area } =
-            await computeIntersectionOnServer(isochroneData, buffer);
-          setIntersection(newIntersection);
-          setIntersectionArea(area);
+        if ((data.listings ?? []).length > 0) {
+          applyListings(data.listings);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred');
@@ -315,7 +323,7 @@ export default function SessionPage() {
     };
 
     loadSession();
-  }, [sessionId, fetchIsochrone, computeIntersectionOnServer]);
+  }, [sessionId, applyListings]);
 
   // Set up real-time subscription
   useEffect(() => {
@@ -651,29 +659,10 @@ export default function SessionPage() {
     }, 250);
   }, [commitBuffer]);
 
-  // The daily cron keeps the DB warm, so stored listings can appear the
-  // moment the zone is known — no button press, no scraping on page load.
-  const autoLoadedRef = useRef(false);
-  useEffect(() => {
-    if (!intersection || autoLoadedRef.current) return;
-    autoLoadedRef.current = true;
-    (async () => {
-      try {
-        const res = await fetch('/api/scrape', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ polygon: intersection, cacheOnly: true }),
-        });
-        const data = await readScrapeResponse(res);
-        if (res.ok && (data.listings?.length ?? 0) > 0) {
-          applyListings(data.listings!);
-          setScrapeCompleted(true);
-        }
-      } catch {
-        // Cache miss is fine — the Find properties button still works
-      }
-    })();
-  }, [intersection, applyListings]);
+  // Stored listings arrive with the bootstrap response, so pins can appear
+  // the moment the common ground is known — no button press, no scraping on
+  // page load. After that, only an explicit buffer change or the Find
+  // properties button re-queries.
 
   if (error === 'Session not found') {
     return (
