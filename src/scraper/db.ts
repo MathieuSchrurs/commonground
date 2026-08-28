@@ -221,3 +221,71 @@ export async function fetchListingsInBbox(
 
   return all;
 }
+
+/**
+ * Answer "is there at least one fresh listing in this bbox?" without paying
+ * for a full-row, possibly multi-page fetch — callers that only need a
+ * boolean (the cache-freshness check) shouldn't pull every column of every
+ * stored listing just to discard them immediately.
+ */
+export async function hasFreshListingsInBbox(
+  minLng: number,
+  minLat: number,
+  maxLng: number,
+  maxLat: number,
+  cutoff: string
+): Promise<boolean> {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from('property_listings')
+    .select('id')
+    .gte('longitude', minLng)
+    .lte('longitude', maxLng)
+    .gte('latitude', minLat)
+    .lte('latitude', maxLat)
+    .gte('scraped_at', cutoff)
+    .limit(1);
+
+  if (error) throw new Error(`Supabase fetch error: ${error.message}`);
+
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Fetch just the id/coordinates of listings first seen since a given
+ * timestamp — used to count/collect newly-appeared listings without pulling
+ * every column of the whole bbox (see fetchListingsInBbox).
+ */
+export async function fetchNewListingsInBbox(
+  minLng: number,
+  minLat: number,
+  maxLng: number,
+  maxLat: number,
+  since: string
+): Promise<{ id: string; latitude: number; longitude: number }[]> {
+  const supabase = getClient();
+  const all: { id: string; latitude: number; longitude: number }[] = [];
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('property_listings')
+      .select('id, latitude, longitude')
+      .gte('longitude', minLng)
+      .lte('longitude', maxLng)
+      .gte('latitude', minLat)
+      .lte('latitude', maxLat)
+      .not('latitude', 'is', null)
+      .not('longitude', 'is', null)
+      .gte('first_seen_at', since)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw new Error(`Supabase fetch error: ${error.message}`);
+
+    const page = (data ?? []) as { id: string; latitude: number; longitude: number }[];
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+
+  return all;
+}

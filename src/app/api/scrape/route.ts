@@ -3,7 +3,7 @@ import { Feature, Polygon, MultiPolygon } from 'geojson';
 import * as turf from '@turf/turf';
 import { refreshListingsForPolygon } from '@/scraper/refresh';
 import { dedupeAcrossSources } from '@/scraper/dedupe';
-import { fetchListingsInBbox } from '@/scraper/db';
+import { fetchListingsInBbox, hasFreshListingsInBbox } from '@/scraper/db';
 import { PropertyListing } from '@/scraper/types';
 
 // Three scrapers in parallel + geocoding pushes past the old 60s ceiling
@@ -31,21 +31,22 @@ export async function POST(req: NextRequest) {
 
     // Return cached data if any listing in the bbox is fresh (< 6h old), unless
     // the caller explicitly asks for a refresh.
-    const existing = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
     const freshCutoff = new Date(Date.now() - CACHE_TTL_MS).toISOString();
-    const hasRecentData = existing.some(l => l.scraped_at && l.scraped_at > freshCutoff);
-    debug.cachedListings = existing.length;
+    const hasRecentData = await hasFreshListingsInBbox(minLng, minLat, maxLng, maxLat, freshCutoff);
     debug.hasRecentData = hasRecentData;
     debug.force = force;
     debug.cacheOnly = cacheOnly;
-    console.log(`[/api/scrape] Cache: ${existing.length} existing, fresh=${hasRecentData}, force=${force}, cacheOnly=${cacheOnly}`);
+    console.log(`[/api/scrape] Cache: fresh=${hasRecentData}, force=${force}, cacheOnly=${cacheOnly}`);
 
-    let allListings: PropertyListing[] = existing;
+    let allListings: PropertyListing[];
 
     if (!cacheOnly && (force || !hasRecentData)) {
       debug.refresh = await refreshListingsForPolygon(polygon);
       allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
+    } else {
+      allListings = await fetchListingsInBbox(minLng, minLat, maxLng, maxLat);
     }
+    debug.cachedListings = allListings.length;
 
     // Polygon filter (bbox is a superset of the polygon)
     const inside = allListings.filter(listing => {
