@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import Map from './Map';
 import { PropertyListing } from '@/scraper/types';
 import type { CommuteConstraint } from '@/types/user';
+import type { ListingReaction, ReactionKind } from '@/types/reactions';
 import type { Feature, Polygon, MultiPolygon } from 'geojson';
 import type mapboxgl from 'mapbox-gl';
 
@@ -46,6 +48,12 @@ function listing(i: number): PropertyListing {
 }
 
 const properties = Array.from({ length: LISTING_COUNT }, (_, i) => listing(i));
+
+// listing(0)'s coordinates — angle 0 puts it due "north" of the ring center,
+// a fixed, known point map.spec.ts zooms/centers on to click a single
+// unclustered pin reliably rather than guessing which of the 24 broke out of
+// a cluster.
+export const POPUP_TARGET_LISTING = listing(0);
 
 // A search zone routinely holds well over a thousand listings (see
 // src/scraper/db.ts) — this fixture is that scale, so map.spec.ts can assert
@@ -107,6 +115,55 @@ export const ManyListings = () => (
     />
   </div>
 );
+
+// Fixture for map.spec.ts's popup test: same 24-listing ring as Default, but
+// with `reactions`/`onToggleReaction` wired to real story state instead of
+// left at their defaults, so a click on the popup's love/object button is
+// observable — the story records what it was called with (and the resulting
+// reaction state) into a hidden form, per the "story owns the state" pattern.
+export const WithReactions = ({ myUserId = 'me' }: { myUserId?: string | null } = {}) => {
+  const [reactions, setReactions] = useState<ListingReaction[]>([]);
+  const [lastToggle, setLastToggle] = useState('');
+
+  const onToggleReaction = (listingId: string, reaction: ReactionKind) => {
+    setLastToggle(`${listingId}:${reaction}`);
+    setReactions(prev => {
+      const mine = prev.find(r => r.listing_id === listingId && r.user_id === myUserId);
+      if (mine) {
+        return mine.reaction === reaction
+          ? prev.filter(r => r !== mine)
+          : prev.map(r => (r === mine ? { ...r, reaction } : r));
+      }
+      return [
+        ...prev,
+        { id: `${listingId}-${myUserId}`, session_id: 'story', listing_id: listingId, user_id: myUserId ?? '', reaction },
+      ];
+    });
+  };
+
+  return (
+    <div style={{ height: '600px', width: '100%' }}>
+      <Map
+        users={EMPTY_USERS}
+        intersection={null}
+        isochrones={[]}
+        properties={properties}
+        reactions={reactions}
+        myUserId={myUserId}
+        onToggleReaction={onToggleReaction}
+        onMapInstance={recordMapForTest}
+      />
+      <form hidden>
+        <input data-testid="last-toggle-call" readOnly value={lastToggle} />
+        <input
+          data-testid="my-reaction"
+          readOnly
+          value={reactions.find(r => r.listing_id === POPUP_TARGET_LISTING.id && r.user_id === myUserId)?.reaction ?? ''}
+        />
+      </form>
+    </div>
+  );
+};
 
 // Two commute zones with a genuine overlap, and their overlap as the
 // intersection — fixtures for map.spec.ts's regression test that an

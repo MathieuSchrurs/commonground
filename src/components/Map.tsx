@@ -28,9 +28,7 @@ interface MapProps {
   /** ids of listings every household is yes on — computed from convergence, so
    *  a couple's two hearts count once rather than twice */
   unanimousListingIds?: Set<string>;
-  /** love/object handler for the listing popup. Currently unread: the popup
-   *  itself is wired to the unclustered-point layer in the follow-up to #38,
-   *  and the prop stays on the interface so the parent keeps passing it. */
+  /** love/object handler for the listing popup, wired to its buttons. */
   onToggleReaction?: (listingId: string, reaction: ReactionKind) => void;
   /** test-only hook: called once with the live mapboxgl.Map instance after
    *  'load', so component tests can assert on layer/source identity across
@@ -108,6 +106,86 @@ function formatPrice(price?: number): string {
   return `€${price.toLocaleString('nl-BE')}`;
 }
 
+// The listing popup's DOM, built once per click. Unlike the deleted
+// per-marker version, there's no persistent node to mutate in place, so this
+// is a plain function of a listing rather than a closure over one — the
+// reactions row is a separate, empty container the caller fills in (and
+// refills, on reaction/identity change) via `renderListingReactions` below.
+function buildListingPopupContent(listing: PropertyListing): { root: HTMLDivElement; reactionsEl: HTMLDivElement } {
+  const root = document.createElement('div');
+  root.className = 'listing-popup';
+  root.style.cssText = 'max-width:220px;font-family:sans-serif;';
+
+  const priceEl = document.createElement('div');
+  priceEl.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:4px;';
+  priceEl.textContent = formatPrice(listing.price);
+  root.appendChild(priceEl);
+
+  const subtitle = listing.title || listing.address;
+  if (subtitle) {
+    const subtitleEl = document.createElement('div');
+    subtitleEl.style.cssText = 'font-size:12px;color:#444;margin-bottom:6px;';
+    subtitleEl.textContent = subtitle;
+    root.appendChild(subtitleEl);
+  }
+
+  const reactionsEl = document.createElement('div');
+  root.appendChild(reactionsEl);
+
+  const link = document.createElement('a');
+  link.href = listing.url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = `View on ${listing.source.charAt(0).toUpperCase()}${listing.source.slice(1)}`;
+  link.style.cssText = 'display:block;text-align:center;background:#334155;color:white;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;margin-top:6px;';
+  root.appendChild(link);
+
+  return { root, reactionsEl };
+}
+
+// Fills (or refills) a popup's reactions row from the current reactions/
+// identity — called once on click and again whenever reactions or the
+// viewer's identity change while the popup is open, replacing the
+// old per-marker `renderReactions` closure now that there's no persistent
+// per-listing DOM node to close over.
+function renderListingReactions(
+  container: HTMLDivElement,
+  listingId: string | undefined,
+  reactions: ListingReaction[],
+  myUserId: string | null,
+  onToggleReaction: ((listingId: string, reaction: ReactionKind) => void) | undefined,
+): void {
+  container.innerHTML = '';
+  if (!listingId) return; // not yet persisted — nothing to react to
+
+  const rs = reactions.filter(r => r.listing_id === listingId);
+  const mine = myUserId ? rs.find(r => r.user_id === myUserId)?.reaction : undefined;
+  const loveCount = rs.filter(r => r.reaction === 'love').length;
+  const objectCount = rs.filter(r => r.reaction === 'object').length;
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;margin:6px 0;';
+
+  const makeButton = (kind: ReactionKind, label: string, active: boolean, activeBg: string, activeBorder: string) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.setAttribute('data-testid', `reaction-${kind}-button`);
+    btn.style.cssText = `flex:1;padding:5px 8px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid ${active ? activeBorder : '#d4d4d8'};background:${active ? activeBg : 'white'};`;
+    if (!myUserId) {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      btn.style.cursor = 'not-allowed';
+    }
+    btn.addEventListener('click', () => onToggleReaction?.(listingId, kind));
+    return btn;
+  };
+
+  row.appendChild(makeButton('love', `❤️ Love${loveCount ? ` · ${loveCount}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
+  row.appendChild(makeButton('object', `✕ Object${objectCount ? ` · ${objectCount}` : ''}`, mine === 'object', '#e4e4e7', '#52525b'));
+  container.appendChild(row);
+}
+
 // One end of the price-range filter: free-text input that commits a clamped
 // value on blur/Enter and resets to the current value on Escape or bad input.
 function PriceInput({ value, lo, hi, align, onCommit }: {
@@ -154,6 +232,7 @@ export default function Map({
   myUserId = null,
   newListingKeys,
   unanimousListingIds,
+  onToggleReaction,
   onMapInstance,
 }: MapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -175,6 +254,28 @@ export default function Map({
   }>>({});
   const onMapInstanceRef = useRef(onMapInstance);
   useEffect(() => { onMapInstanceRef.current = onMapInstance; }, [onMapInstance]);
+
+  // The listing popup's click handler is registered once (in the
+  // source/layer-creation effect below) and needs current values every time
+  // it fires, so it reads them from refs rather than closing over stale
+  // props — the same pattern `onMapInstanceRef` uses above.
+  const propertiesRef = useRef(properties);
+  useEffect(() => { propertiesRef.current = properties; }, [properties]);
+  const reactionsRef = useRef(reactions);
+  useEffect(() => { reactionsRef.current = reactions; }, [reactions]);
+  const myUserIdRef = useRef(myUserId);
+  useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
+  const onToggleReactionRef = useRef(onToggleReaction);
+  useEffect(() => { onToggleReactionRef.current = onToggleReaction; }, [onToggleReaction]);
+
+  // A single, reusable popup instance rather than one per listing: there's no
+  // per-listing DOM node left to hang a popup off, so it's created lazily on
+  // the first click and moved/refilled on every click after that.
+  // `openListingPopup` tracks which listing (if any) it currently shows, and
+  // its reactions container, so the reactions-changed effect below knows
+  // whether — and what — to refill.
+  const listingPopupRef = useRef<mapboxgl.Popup | null>(null);
+  const openListingPopupRef = useRef<{ listing: PropertyListing; reactionsEl: HTMLDivElement } | null>(null);
 
   // Filters applied to property pins
   const [sourceFilter, setSourceFilter] = useState<Record<string, boolean>>({
@@ -653,15 +754,58 @@ export default function Map({
       });
     });
 
-    // Cursor affordance on both. The love/object popup for a single listing
-    // hangs off a `click` on LISTINGS_POINT_LAYER (the follow-up to #38): the
-    // clicked feature carries `listingKey` (`source:external_id`), which is
-    // what identifies the PropertyListing the popup is built from.
+    // Clicking an individual listing opens (or moves) the single reusable
+    // popup. The clicked feature carries `listingKey` (`source:external_id`),
+    // resolved back to a PropertyListing via propertiesRef — reading refs
+    // rather than closing over `properties`/`reactions`/etc. because this
+    // handler is registered once, when the layer is created, not on every
+    // render.
+    m.on('click', LISTINGS_POINT_LAYER, (e) => {
+      const feature = e.features?.[0];
+      const listingKey = feature?.properties?.listingKey as string | undefined;
+      const geometry = feature?.geometry;
+      if (!listingKey || geometry?.type !== 'Point') return;
+      const listing = propertiesRef.current.find(
+        (p) => `${p.source}:${p.external_id}` === listingKey
+      );
+      if (!listing) return;
+
+      const { root, reactionsEl } = buildListingPopupContent(listing);
+      openListingPopupRef.current = { listing, reactionsEl };
+      renderListingReactions(
+        reactionsEl,
+        listing.id,
+        reactionsRef.current,
+        myUserIdRef.current,
+        onToggleReactionRef.current
+      );
+
+      if (!listingPopupRef.current) {
+        listingPopupRef.current = new mapboxgl.Popup({ offset: 14, maxWidth: '240px' });
+        listingPopupRef.current.on('close', () => { openListingPopupRef.current = null; });
+      }
+      listingPopupRef.current
+        .setLngLat(geometry.coordinates as [number, number])
+        .setDOMContent(root)
+        .addTo(m);
+    });
+
+    // Cursor affordance on both.
     for (const layerId of [LISTINGS_CLUSTER_LAYER, LISTINGS_POINT_LAYER]) {
       m.on('mouseenter', layerId, () => { m.getCanvas().style.cursor = 'pointer'; });
       m.on('mouseleave', layerId, () => { m.getCanvas().style.cursor = ''; });
     }
   }, [mapLoaded]);
+
+  // Keep an open popup's reactions row current: someone else reacting, or the
+  // viewer picking their name, should be reflected without needing to
+  // reopen the popup. Mirrors the old per-marker `renderReactions` effect,
+  // but against the single open popup rather than every marker.
+  useEffect(() => {
+    const open = openListingPopupRef.current;
+    if (!open) return;
+    renderListingReactions(open.reactionsEl, open.listing.id, reactions, myUserId, onToggleReaction);
+  }, [reactions, myUserId, onToggleReaction]);
 
   // Feed the listing source. Filter changes, reactions, unanimity and
   // freshness all land here as new data on the existing source — the source

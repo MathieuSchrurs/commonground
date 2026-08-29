@@ -2,11 +2,13 @@ import { test, expect } from '@playwright/test';
 import {
   LISTING_COUNT,
   MANY_LISTING_COUNT,
+  POPUP_TARGET_LISTING,
   ISOCHRONE_FIXTURES,
   INTERSECTION_FIXTURE,
   USER_FIXTURES,
   type Default,
   type ManyListings,
+  type WithReactions,
   type WithZones,
   type WithUsers,
 } from './Map.story';
@@ -28,6 +30,8 @@ type MapWindow = typeof globalThis & {
     getSource: (id: string) => GeoJSONSourceLike | undefined;
     getLayer: (id: string) => unknown;
     setZoom: (zoom: number) => void;
+    setCenter: (center: [number, number]) => void;
+    project: (lngLat: [number, number]) => { x: number; y: number };
     once: (event: string, cb: () => void) => void;
     queryRenderedFeatures: (options: { layers: string[] }) => RenderedFeature[];
   };
@@ -307,5 +311,47 @@ test.describe('Map story gallery', () => {
     );
 
     expect(idsAfter.sort()).toEqual(idsBefore.sort());
+  });
+
+  test('clicking an individual listing point opens a popup with working love/object controls', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    const component = await mount<typeof WithReactions>('components/Map/WithReactions', { myUserId: 'me' });
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+
+    // Center and zoom in on the known target listing so it renders as an
+    // individual unclustered point rather than part of a cluster, then wait
+    // for the map to settle before projecting its screen position — clicking
+    // before that risks the pin not having re-drawn at the new zoom yet.
+    await page.evaluate(([lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return new Promise<void>((resolve) => {
+        map.once('idle', () => resolve());
+        map.setCenter([lng, lat]);
+        map.setZoom(16);
+      });
+    }, [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    const point = await page.evaluate(([lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return map.project([lng, lat]);
+    }, [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    await component.locator('.mapboxgl-canvas').click({ position: point });
+
+    const popup = page.locator('.mapboxgl-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+    const loveButton = popup.getByTestId('reaction-love-button');
+    await expect(loveButton).toBeVisible();
+
+    // Nothing recorded yet — proves the assertion below is really driven by
+    // the click, not by some pre-existing state.
+    await expect(component.getByTestId('last-toggle-call')).toHaveValue('');
+
+    await loveButton.click();
+
+    await expect(component.getByTestId('last-toggle-call')).toHaveValue(`${POPUP_TARGET_LISTING.id}:love`);
+    await expect(component.getByTestId('my-reaction')).toHaveValue('love');
   });
 });
