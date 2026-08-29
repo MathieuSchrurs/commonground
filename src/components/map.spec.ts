@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { LISTING_COUNT, ISOCHRONE_FIXTURES, INTERSECTION_FIXTURE, type Default, type WithZones } from './Map.story';
+import { LISTING_COUNT, ISOCHRONE_FIXTURES, INTERSECTION_FIXTURE, USER_FIXTURES, type Default, type WithZones, type WithUsers } from './Map.story';
 
 // Minimal shape of the window globals WithZones records — avoids pulling the
 // mapbox-gl types into code that runs inside page.evaluate.
@@ -134,5 +134,37 @@ test.describe('Map story gallery', () => {
       intersectionSourceUnchanged: true,
       intersectionSetDataCalls: 0,
     });
+  });
+
+  test('an unrelated re-render does not tear down and recreate participant markers', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    const component = await mount<typeof WithUsers>('components/Map/WithUsers', { users: USER_FIXTURES });
+    await expect(component.locator('.user-marker')).toHaveCount(USER_FIXTURES.length, { timeout: 15000 });
+
+    // Tag the live marker nodes so the check below is "these exact nodes
+    // survived", not just "the count still matches" — a naive tear-down and
+    // recreate would still land on the same count with a fresh set of nodes.
+    const idsBefore = await page.evaluate(() => {
+      const nodes = Array.from(document.querySelectorAll('.user-marker'));
+      nodes.forEach((el, i) => el.setAttribute('data-test-marker-id', String(i)));
+      return nodes.map((_, i) => String(i));
+    });
+
+    // Sending the exact same fixture through update() still crosses the
+    // mount/update page.evaluate boundary, so the browser receives a brand
+    // new `users` array reference with unchanged content — exactly what an
+    // unrelated re-render produces in the real app (e.g. a household-pairing
+    // field changing, or any other state unrelated to any participant's
+    // position/color/transport-mode/name). Map.tsx should leave the existing
+    // marker DOM nodes alone.
+    await component.update({ users: USER_FIXTURES });
+
+    await expect(component.locator('.user-marker')).toHaveCount(USER_FIXTURES.length, { timeout: 15000 });
+    const idsAfter = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.user-marker')).map((el) => el.getAttribute('data-test-marker-id'))
+    );
+
+    expect(idsAfter.sort()).toEqual(idsBefore.sort());
   });
 });

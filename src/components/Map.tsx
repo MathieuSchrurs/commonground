@@ -122,8 +122,16 @@ export default function Map({
   // 3D buildings + fog cost real GPU work, so they're opt-in via the Layers
   // panel rather than always-on.
   const [show3D, setShow3D] = useState(false);
-  const markersRef = useRef<mapboxgl.Marker[]>([]);
-  const markerContainersRef = useRef<HTMLDivElement[]>([]);
+  // Keyed by participant id so an unrelated re-render (new-but-equal `users`
+  // array reference, e.g. from a household-pairing field elsewhere) updates
+  // existing markers in place instead of tearing down and recreating every
+  // marker DOM node — same idiom as propertyMarkersRef below.
+  const userMarkersRef = useRef<Record<string, {
+    marker: mapboxgl.Marker;
+    el: HTMLDivElement;
+    badge: HTMLDivElement;
+    popup: mapboxgl.Popup;
+  }>>({});
   // Keyed by source:external_id so we can update visibility without recreating
   // DOM nodes on filter changes. Using a plain object — the component is
   // already named `Map`, which shadows the global Map constructor inside the
@@ -396,17 +404,42 @@ export default function Map({
     }
   }, [show3D, mapLoaded]);
 
-  // Render user markers
+  // Render user markers — incremental, keyed by participant id (mirroring
+  // propertyMarkersRef below): a marker's DOM node is only created or removed
+  // when a participant is added or removed. For a participant who's still
+  // present, position/color/icon/popup are updated on the existing node
+  // instead of destroying and recreating it, so an unrelated re-render (e.g.
+  // a household-pairing field changing, or simply a fresh-but-equal `users`
+  // array) doesn't tear down every marker.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
-    markersRef.current.forEach(marker => marker.remove());
-    markersRef.current = [];
-    markerContainersRef.current = [];
+    const wanted = new Set(users.map(u => u.id));
+
+    for (const id of Object.keys(userMarkersRef.current)) {
+      if (!wanted.has(id)) {
+        userMarkersRef.current[id].marker.remove();
+        delete userMarkersRef.current[id];
+      }
+    }
 
     users.forEach((user, index) => {
       const color = COLORS[index % COLORS.length];
       const transportIcon = user.transportMode === 'driving' ? '🚗' : '🚲';
+      const popupHtml = `<strong>${user.name}</strong><br/>${user.address}<br/>Max: ${user.maxMinutes} min<br/>${transportIcon} ${user.transportMode === 'driving' ? 'Car' : 'Bike'}`;
+
+      const existing = userMarkersRef.current[user.id];
+      if (existing) {
+        existing.marker.setLngLat([user.longitude, user.latitude]);
+        existing.el.style.backgroundColor = color;
+        // textContent clears children, so re-append the same badge node
+        // (not a new one) rather than rebuilding it.
+        existing.el.textContent = (index + 1).toString();
+        existing.el.appendChild(existing.badge);
+        existing.badge.textContent = transportIcon;
+        existing.popup.setHTML(popupHtml);
+        return;
+      }
 
       const el = document.createElement('div');
       el.className = 'user-marker';
@@ -444,16 +477,12 @@ export default function Map({
       el.appendChild(badge);
 
       if (map.current) {
+        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(popupHtml);
         const marker = new mapboxgl.Marker(el)
           .setLngLat([user.longitude, user.latitude])
-          .setPopup(
-            new mapboxgl.Popup({ offset: 25 }).setHTML(
-              `<strong>${user.name}</strong><br/>${user.address}<br/>Max: ${user.maxMinutes} min<br/>${transportIcon} ${user.transportMode === 'driving' ? 'Car' : 'Bike'}`
-            )
-          )
+          .setPopup(popup)
           .addTo(map.current);
-        markersRef.current.push(marker);
-        markerContainersRef.current.push(el);
+        userMarkersRef.current[user.id] = { marker, el, badge, popup };
       }
     });
   }, [users, mapLoaded]);
@@ -461,10 +490,11 @@ export default function Map({
   // Toggle user marker visibility
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
-    markerContainersRef.current.forEach((el, index) => {
+    users.forEach((user, index) => {
+      const el = userMarkersRef.current[user.id]?.el;
       if (el) el.style.opacity = visibility.markers[index] ? '1' : '0';
     });
-  }, [visibility.markers, mapLoaded]);
+  }, [visibility.markers, users, mapLoaded]);
 
   // Render property markers — incremental: only create new markers and remove
   // ones no longer in the list. Filter visibility is handled separately.

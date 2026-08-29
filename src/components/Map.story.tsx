@@ -103,3 +103,35 @@ export const WithZones = ({
     />
   </div>
 );
+
+// Two participants — fixture for map.spec.ts's regression test that an
+// unrelated re-render (new-but-content-equal `users` reference, the exact
+// shape the parent produces every render, e.g. via a household-pairing field
+// changing) doesn't tear down and recreate participant markers keyed by
+// identity.
+export const USER_FIXTURES: CommuteConstraint[] = [
+  {
+    id: 'user-1',
+    name: 'Alex',
+    address: 'Korenlei 1, Ghent',
+    latitude: 51.0543,
+    longitude: 3.7174,
+    maxMinutes: 30,
+    transportMode: 'driving',
+  },
+  {
+    id: 'user-2',
+    name: 'Sam',
+    address: 'Vrijdagmarkt 1, Ghent',
+    latitude: 51.0570,
+    longitude: 3.7250,
+    maxMinutes: 25,
+    transportMode: 'cycling',
+  },
+];
+
+export const WithUsers = ({ users = USER_FIXTURES }: { users?: CommuteConstraint[] } = {}) => (
+  <div style={{ height: '600px', width: '100%' }}>
+    <Map users={users} intersection={null} isochrones={[]} properties={[]} />
+  </div>
+);
