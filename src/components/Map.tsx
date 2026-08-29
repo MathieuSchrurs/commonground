@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { Feature, Polygon, MultiPolygon } from 'geojson';
+import { Feature, FeatureCollection, Point, Polygon, MultiPolygon } from 'geojson';
 import { Eye, Layers, Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
 import { PropertyListing } from '@/scraper/types';
@@ -23,12 +23,15 @@ interface MapProps {
   reactions?: ListingReaction[];
   /** session_user id of the person at this browser; null until they pick */
   myUserId?: string | null;
-  onToggleReaction?: (listingId: string, reaction: ReactionKind) => void;
   /** `source:external_id` keys of listings that appeared since the last visit */
   newListingKeys?: Set<string>;
   /** ids of listings every household is yes on — computed from convergence, so
    *  a couple's two hearts count once rather than twice */
   unanimousListingIds?: Set<string>;
+  /** love/object handler for the listing popup. Currently unread: the popup
+   *  itself is wired to the unclustered-point layer in the follow-up to #38,
+   *  and the prop stays on the interface so the parent keeps passing it. */
+  onToggleReaction?: (listingId: string, reaction: ReactionKind) => void;
   /** test-only hook: called once with the live mapboxgl.Map instance after
    *  'load', so component tests can assert on layer/source identity across
    *  prop updates without instrumenting Map.tsx further */
@@ -60,6 +63,45 @@ const SOURCE_COLORS: Record<string, string> = {
   immovlan: '#16a34a',
   immoscoop: '#0e7490',
 };
+
+// Listings render as one clustered GeoJSON source, not one DOM node each: a
+// single search zone routinely holds 1000+ listings (src/scraper/db.ts), and
+// a marker per listing means that many DOM nodes re-projected on every pan.
+const LISTINGS_SOURCE = 'listings';
+const LISTINGS_HALO_LAYER = 'listings-halo';
+const LISTINGS_POINT_LAYER = 'listings-unclustered';
+const LISTINGS_CLUSTER_LAYER = 'listings-clusters';
+const LISTINGS_CLUSTER_COUNT_LAYER = 'listings-cluster-count';
+const LISTINGS_LAYERS = [
+  LISTINGS_HALO_LAYER,
+  LISTINGS_POINT_LAYER,
+  LISTINGS_CLUSTER_LAYER,
+  LISTINGS_CLUSTER_COUNT_LAYER,
+];
+
+// A listing's group opinion and freshness used to be inline styles on its own
+// DOM node. With no per-listing node left, they travel as feature properties
+// and are read back by data-driven paint expressions on the layers below.
+interface ListingFeatureProperties {
+  listingKey: string;
+  color: string;
+  approximate: boolean;
+  objected: boolean;
+  loved: boolean;
+  lovedByAll: boolean;
+  isNew: boolean;
+}
+
+const EMPTY_LISTINGS: FeatureCollection<Point, ListingFeatureProperties> = {
+  type: 'FeatureCollection',
+  features: [],
+};
+
+// Default for the `reactions` prop. A literal default would build a fresh
+// array on every render, which would re-`setData` the listing source on every
+// render of the parent — the same reference-vs-content trap the isochrone
+// effects hit.
+const NO_REACTIONS: ListingReaction[] = [];
 
 function formatPrice(price?: number): string {
   if (!price) return 'Price on request';
@@ -108,9 +150,8 @@ export default function Map({
   isochrones,
   properties = [],
   isLoading = false,
-  reactions = [],
+  reactions = NO_REACTIONS,
   myUserId = null,
-  onToggleReaction,
   newListingKeys,
   unanimousListingIds,
   onMapInstance,
@@ -125,34 +166,13 @@ export default function Map({
   // Keyed by participant id so an unrelated re-render (new-but-equal `users`
   // array reference, e.g. from a household-pairing field elsewhere) updates
   // existing markers in place instead of tearing down and recreating every
-  // marker DOM node — same idiom as propertyMarkersRef below.
+  // marker DOM node.
   const userMarkersRef = useRef<Record<string, {
     marker: mapboxgl.Marker;
     el: HTMLDivElement;
     badge: HTMLDivElement;
     popup: mapboxgl.Popup;
   }>>({});
-  // Keyed by source:external_id so we can update visibility without recreating
-  // DOM nodes on filter changes. Using a plain object — the component is
-  // already named `Map`, which shadows the global Map constructor inside the
-  // function body.
-  const propertyMarkersRef = useRef<Record<string, {
-    marker: mapboxgl.Marker;
-    listing: PropertyListing;
-    renderReactions?: () => void;
-  }>>({});
-
-  // Popup vote buttons are plain DOM created once per marker; these refs let
-  // their click handlers and re-renders always see the latest props without
-  // recreating markers on every reaction change.
-  const reactionsRef = useRef(reactions);
-  useEffect(() => { reactionsRef.current = reactions; }, [reactions]);
-  const myUserIdRef = useRef(myUserId);
-  useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
-  const onToggleReactionRef = useRef(onToggleReaction);
-  useEffect(() => { onToggleReactionRef.current = onToggleReaction; }, [onToggleReaction]);
-  const usersForNamesRef = useRef(users);
-  useEffect(() => { usersForNamesRef.current = users; }, [users]);
   const onMapInstanceRef = useRef(onMapInstance);
   useEffect(() => { onMapInstanceRef.current = onMapInstance; }, [onMapInstance]);
 
@@ -207,6 +227,47 @@ export default function Map({
     [properties, matchesFilters]
   );
 
+  // The listings the map draws, as GeoJSON. Filtering happens here rather
+  // than as a Mapbox filter expression so `passesListingFilters` stays the
+  // single definition of what's visible — the same predicate behind
+  // `visibleCount`, so the panel's count and the map can't disagree.
+  const listingData = useMemo<FeatureCollection<Point, ListingFeatureProperties>>(() => {
+    const byListing = new globalThis.Map<string, ListingReaction[]>();
+    for (const r of reactions) {
+      const existing = byListing.get(r.listing_id);
+      if (existing) existing.push(r);
+      else byListing.set(r.listing_id, [r]);
+    }
+
+    const features: Feature<Point, ListingFeatureProperties>[] = [];
+    for (const listing of properties) {
+      if (!listing.latitude || !listing.longitude) continue;
+      if (!matchesFilters(listing)) continue;
+
+      const listingKey = `${listing.source}:${listing.external_id}`;
+      const rs = (listing.id && byListing.get(listing.id)) || [];
+      features.push({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [Number(listing.longitude), Number(listing.latitude)],
+        },
+        properties: {
+          listingKey,
+          color: SOURCE_COLORS[listing.source] ?? '#6b7280',
+          approximate: listing.location_precision === 'approximate',
+          objected: rs.some(r => r.reaction === 'object'),
+          loved: rs.some(r => r.reaction === 'love'),
+          // Unanimity is a household question, not a headcount — the parent
+          // computes it from convergence so the map and the dashboard agree.
+          lovedByAll: listing.id ? (unanimousListingIds?.has(listing.id) ?? false) : false,
+          isNew: newListingKeys?.has(listingKey) ?? false,
+        },
+      });
+    }
+    return { type: 'FeatureCollection', features };
+  }, [properties, matchesFilters, reactions, newListingKeys, unanimousListingIds]);
+
   // Individual commute zones default to hidden: with several members their
   // filled overlays stack up and bury the streets. The common area (the only
   // zone that matters for the search) stays visible, and the Zones master
@@ -241,12 +302,6 @@ export default function Map({
   const intersectionKey = intersection ? JSON.stringify(intersection.geometry.coordinates) : '';
   const intersectionRef = useRef(intersection);
   intersectionRef.current = intersection;
-
-  // Always-current filter state so the marker-creation effect can apply the
-  // right opacity on new pins without listing filters in its deps (which
-  // would tear down DOM on every slider drag).
-  const filterStateRef = useRef({ sourceFilter, priceRange, visibilityProperties: visibility.properties });
-  filterStateRef.current = { sourceFilter, priceRange, visibilityProperties: visibility.properties };
 
   const prevCounts = useRef({ users: users.length, isochrones: isochrones.length });
 
@@ -404,13 +459,12 @@ export default function Map({
     }
   }, [show3D, mapLoaded]);
 
-  // Render user markers — incremental, keyed by participant id (mirroring
-  // propertyMarkersRef below): a marker's DOM node is only created or removed
-  // when a participant is added or removed. For a participant who's still
-  // present, position/color/icon/popup are updated on the existing node
-  // instead of destroying and recreating it, so an unrelated re-render (e.g.
-  // a household-pairing field changing, or simply a fresh-but-equal `users`
-  // array) doesn't tear down every marker.
+  // Render user markers — incremental, keyed by participant id: a marker's
+  // DOM node is only created or removed when a participant is added or
+  // removed. For a participant who's still present, position/color/icon/popup
+  // are updated on the existing node instead of destroying and recreating it,
+  // so an unrelated re-render (e.g. a household-pairing field changing, or
+  // simply a fresh-but-equal `users` array) doesn't tear down every marker.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
@@ -496,165 +550,138 @@ export default function Map({
     });
   }, [visibility.markers, users, mapLoaded]);
 
-  // Render property markers — incremental: only create new markers and remove
-  // ones no longer in the list. Filter visibility is handled separately.
+  // Render listing pins as one clustered GeoJSON source rather than a marker
+  // per listing. Source and layers are created once; everything after that —
+  // filters, reactions, freshness — arrives as new data on the same source.
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
+    const m = map.current;
+    if (m.getSource(LISTINGS_SOURCE)) return;
 
-    const wanted = new Set<string>();
-    properties.forEach(l => wanted.add(`${l.source}:${l.external_id}`));
+    m.addSource(LISTINGS_SOURCE, {
+      type: 'geojson',
+      data: EMPTY_LISTINGS,
+      cluster: true,
+      clusterMaxZoom: 14,
+      clusterRadius: 50,
+    });
 
-    // Drop markers no longer present
-    for (const key of Object.keys(propertyMarkersRef.current)) {
-      if (!wanted.has(key)) {
-        propertyMarkersRef.current[key].marker.remove();
-        delete propertyMarkersRef.current[key];
+    // Layers are created in a different commit than the panel's toggle state
+    // flips, so apply the current visibility at creation — same reason the
+    // isochrone layers read `visibilityRef` below.
+    const listingsVisibility: 'visible' | 'none' = visibilityRef.current.properties ? 'visible' : 'none';
+
+    // Glow behind a listing every household is yes on, halo behind one that's
+    // new since the last visit. A circle layer can't carry the two stacked
+    // box-shadows the old DOM dot did, so they get their own layer beneath.
+    m.addLayer({
+      id: LISTINGS_HALO_LAYER,
+      type: 'circle',
+      source: LISTINGS_SOURCE,
+      layout: { visibility: listingsVisibility },
+      filter: ['any', ['==', ['get', 'lovedByAll'], true], ['==', ['get', 'isNew'], true]],
+      paint: {
+        'circle-radius': ['case', ['get', 'lovedByAll'], 13, 11],
+        'circle-color': ['case', ['get', 'lovedByAll'], '#f59e0b', '#2563eb'],
+        'circle-opacity': ['case', ['get', 'lovedByAll'], 0.45, 0.35],
+      },
+    });
+
+    m.addLayer({
+      id: LISTINGS_POINT_LAYER,
+      type: 'circle',
+      source: LISTINGS_SOURCE,
+      layout: { visibility: listingsVisibility },
+      filter: ['!', ['has', 'point_count']],
+      paint: {
+        'circle-radius': 7,
+        // Postcode-centroid pins stay hollow, so an approximate location is
+        // never mistaken for a real one.
+        'circle-color': ['case', ['get', 'approximate'], 'rgba(0,0,0,0)', ['get', 'color']],
+        // An objection dims a listing, it never removes it — ADR 0002.
+        'circle-opacity': ['case', ['get', 'objected'], 0.35, 1],
+        'circle-stroke-width': 2,
+        'circle-stroke-color': [
+          'case',
+          ['get', 'loved'], '#f59e0b',
+          ['get', 'approximate'], ['get', 'color'],
+          '#ffffff',
+        ],
+        'circle-stroke-opacity': ['case', ['get', 'objected'], 0.35, 1],
+      },
+    });
+
+    m.addLayer({
+      id: LISTINGS_CLUSTER_LAYER,
+      type: 'circle',
+      source: LISTINGS_SOURCE,
+      layout: { visibility: listingsVisibility },
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-color': '#334155',
+        'circle-opacity': 0.85,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+        'circle-radius': ['step', ['get', 'point_count'], 14, 25, 20, 100, 26],
+      },
+    });
+
+    m.addLayer({
+      id: LISTINGS_CLUSTER_COUNT_LAYER,
+      type: 'symbol',
+      source: LISTINGS_SOURCE,
+      layout: {
+        visibility: listingsVisibility,
+        'text-field': ['get', 'point_count_abbreviated'],
+        'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+        'text-size': 12,
+      },
+      paint: { 'text-color': '#ffffff' },
+    });
+
+    // A cluster is only useful if it opens: clicking one zooms to where it
+    // breaks apart.
+    m.on('click', LISTINGS_CLUSTER_LAYER, (e) => {
+      const feature = e.features?.[0];
+      const clusterId = feature?.properties?.cluster_id;
+      const geometry = feature?.geometry;
+      if (typeof clusterId !== 'number' || geometry?.type !== 'Point') return;
+      const source = m.getSource(LISTINGS_SOURCE) as mapboxgl.GeoJSONSource | undefined;
+      source?.getClusterExpansionZoom(clusterId, (err, zoom) => {
+        if (err || zoom == null) return;
+        m.easeTo({ center: geometry.coordinates as [number, number], zoom });
+      });
+    });
+
+    // Cursor affordance on both. The love/object popup for a single listing
+    // hangs off a `click` on LISTINGS_POINT_LAYER (the follow-up to #38): the
+    // clicked feature carries `listingKey` (`source:external_id`), which is
+    // what identifies the PropertyListing the popup is built from.
+    for (const layerId of [LISTINGS_CLUSTER_LAYER, LISTINGS_POINT_LAYER]) {
+      m.on('mouseenter', layerId, () => { m.getCanvas().style.cursor = 'pointer'; });
+      m.on('mouseleave', layerId, () => { m.getCanvas().style.cursor = ''; });
+    }
+  }, [mapLoaded]);
+
+  // Feed the listing source. Filter changes, reactions, unanimity and
+  // freshness all land here as new data on the existing source — the source
+  // is never torn down and rebuilt for them.
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+    const source = map.current.getSource(LISTINGS_SOURCE) as mapboxgl.GeoJSONSource | undefined;
+    source?.setData(listingData);
+  }, [listingData, mapLoaded]);
+
+  // Master toggle for the listing layers.
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+    const value = visibility.properties ? 'visible' : 'none';
+    for (const layerId of LISTINGS_LAYERS) {
+      if (map.current.getLayer(layerId)) {
+        map.current.setLayoutProperty(layerId, 'visibility', value);
       }
     }
-
-    properties.forEach((listing) => {
-      const key = `${listing.source}:${listing.external_id}`;
-      if (propertyMarkersRef.current[key]) return; // already on map
-      if (!listing.latitude || !listing.longitude) return;
-
-      const color = SOURCE_COLORS[listing.source] ?? '#6b7280';
-
-      // Mapbox positions the outer `el` via inline `transform: translate(...)`.
-      // Don't touch its transform — animate a child instead. The dot stays
-      // symmetric so anchor: 'center' lands the coordinate at the visual middle.
-      const el = document.createElement('div');
-      el.style.width = '14px';
-      el.style.height = '14px';
-      el.style.cursor = 'pointer';
-
-      const approximate = listing.location_precision === 'approximate';
-
-      const dot = document.createElement('div');
-      dot.style.width = '14px';
-      dot.style.height = '14px';
-      dot.style.borderRadius = '50%';
-      // Postcode-centroid pins: hollow ring instead of solid dot, so an
-      // approximate location is never mistaken for a real one.
-      dot.style.backgroundColor = approximate ? 'transparent' : color;
-      dot.style.border = approximate ? `2px dashed ${color}` : '2px solid white';
-      dot.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)';
-      dot.style.transition = 'transform 150ms ease, opacity 300ms ease';
-      dot.style.transformOrigin = 'center';
-      el.appendChild(dot);
-
-      el.addEventListener('mouseenter', () => { dot.style.transform = 'scale(1.5)'; });
-      el.addEventListener('mouseleave', () => { dot.style.transform = 'scale(1)'; });
-
-      const isNew = newListingKeys?.has(key) ?? false;
-
-      const dropped = listing.previous_price != null && listing.price != null
-        && listing.previous_price !== listing.price;
-      const priceChangeHtml = dropped
-        ? `<span style="color:${listing.price! < listing.previous_price! ? '#16a34a' : '#dc2626'};font-size:11px;font-weight:600;margin-left:6px;">${listing.price! < listing.previous_price! ? '↓' : '↑'} was ${formatPrice(listing.previous_price!)}</span>`
-        : '';
-      const daysOnMarket = listing.first_seen_at
-        ? Math.max(0, Math.floor((Date.now() - Date.parse(listing.first_seen_at)) / 86400000))
-        : null;
-
-      // Popup is real DOM (not an HTML string) so the vote buttons can carry
-      // working click handlers.
-      const popupEl = document.createElement('div');
-      popupEl.style.cssText = 'max-width:220px;font-family:sans-serif;';
-      popupEl.innerHTML = `
-        ${listing.image_url ? `<img src="${listing.image_url}" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;" />` : ''}
-        <div style="font-weight:700;font-size:14px;margin-bottom:4px;">
-          ${formatPrice(listing.price)}
-          ${priceChangeHtml}
-          ${isNew ? '<span style="background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;">NEW</span>' : ''}
-        </div>
-        ${daysOnMarket !== null ? `<div style="font-size:10px;color:#888;margin-bottom:4px;">${daysOnMarket === 0 ? 'First seen today' : `${daysOnMarket} day${daysOnMarket === 1 ? '' : 's'} on the market`}</div>` : ''}
-        ${approximate ? '<div style="font-size:10px;color:#b45309;margin-bottom:4px;">⌖ Approximate location (postcode area) — check the listing for the real address</div>' : ''}
-        ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
-        ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
-        <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
-          ${listing.bedrooms ? `<span>🛏 ${listing.bedrooms}</span>` : ''}
-          ${listing.surface_area ? `<span>📐 ${listing.surface_area} m²</span>` : ''}
-          ${listing.land_area ? `<span>🌿 ${listing.land_area} m²</span>` : ''}
-        </div>
-      `;
-
-      // Love/object controls, re-rendered whenever reactions or identity change
-      const reactionsEl = document.createElement('div');
-      popupEl.appendChild(reactionsEl);
-      const renderReactions = () => {
-        reactionsEl.innerHTML = '';
-        if (!listing.id) return; // not yet persisted — nothing to react to
-
-        const rs = reactionsRef.current.filter(r => r.listing_id === listing.id);
-        const me = myUserIdRef.current;
-        const mine = me ? rs.find(r => r.user_id === me)?.reaction : undefined;
-        const nameOf = new globalThis.Map(usersForNamesRef.current.map(u => [u.id, u.name]));
-        const loveNames = rs.filter(r => r.reaction === 'love').map(r => nameOf.get(r.user_id) ?? '?');
-        const objectNames = rs.filter(r => r.reaction === 'object').map(r => nameOf.get(r.user_id) ?? '?');
-
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;';
-        const makeButton = (kind: ReactionKind, label: string, active: boolean, activeBg: string, activeBorder: string) => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.textContent = label;
-          btn.style.cssText = `flex:1;padding:5px 8px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid ${active ? activeBorder : '#d4d4d8'};background:${active ? activeBg : 'white'};`;
-          if (!me) {
-            btn.disabled = true;
-            btn.style.opacity = '0.5';
-            btn.style.cursor = 'not-allowed';
-          }
-          btn.addEventListener('click', () => onToggleReactionRef.current?.(listing.id!, kind));
-          return btn;
-        };
-        row.appendChild(makeButton('love', `❤️ Love${loveNames.length ? ` · ${loveNames.length}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
-        row.appendChild(makeButton('object', `✕ Object${objectNames.length ? ` · ${objectNames.length}` : ''}`, mine === 'object', '#e4e4e7', '#52525b'));
-        reactionsEl.appendChild(row);
-
-        const note = document.createElement('div');
-        note.style.cssText = 'font-size:10px;color:#888;margin-bottom:8px;';
-        if (loveNames.length || objectNames.length) {
-          note.textContent = [
-            loveNames.length ? `❤️ ${loveNames.join(', ')}` : '',
-            objectNames.length ? `✕ ${objectNames.join(', ')}` : '',
-          ].filter(Boolean).join('  ·  ');
-        } else if (!me) {
-          note.textContent = 'Pick your name in the sidebar to vote';
-        }
-        if (note.textContent) reactionsEl.appendChild(note);
-      };
-
-      popupEl.insertAdjacentHTML('beforeend', `
-        <a href="${listing.url}" target="_blank" rel="noopener noreferrer"
-           style="display:block;text-align:center;background:${color};color:white;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;">
-          View on ${listing.source.charAt(0).toUpperCase() + listing.source.slice(1)}
-        </a>
-      `);
-
-      if (map.current) {
-        const popup = new mapboxgl.Popup({ offset: 14, maxWidth: '240px' }).setDOMContent(popupEl);
-        popup.on('open', renderReactions);
-        const marker = new mapboxgl.Marker(el)
-          .setLngLat([Number(listing.longitude), Number(listing.latitude)])
-          .setPopup(popup)
-          .addTo(map.current);
-        propertyMarkersRef.current[key] = { marker, listing, renderReactions };
-
-        // Apply current filter at creation. We set opacity on the child `dot`
-        // (not `el`) because Mapbox rewrites the outer marker's inline opacity
-        // on zoom/move for its own terrain-occlusion fade — that would wipe
-        // out our filter. `pointer-events` goes on the outer so hidden pins
-        // can't be clicked through.
-        const { sourceFilter: sf, priceRange: pr, visibilityProperties: vp } = filterStateRef.current;
-        const sOk = sf[listing.source] !== false;
-        const pOk = listing.price == null || !pr
-          || (listing.price >= pr[0] && listing.price <= pr[1]);
-        const initiallyVisible = vp && sOk && pOk;
-        dot.style.opacity = initiallyVisible ? '1' : '0';
-        el.style.pointerEvents = initiallyVisible ? 'auto' : 'none';
-      }
-    });
-  }, [properties, mapLoaded, newListingKeys]);
+  }, [visibility.properties, mapLoaded]);
 
   // Mapbox only tracks window resizes; when the container itself changes size
   // (sidebar content growing, layout settling) the canvas keeps its old
@@ -665,66 +692,6 @@ export default function Map({
     observer.observe(mapContainer.current);
     return () => observer.disconnect();
   }, [mapLoaded]);
-
-  // Re-render vote buttons inside any open popup when reactions or the
-  // viewer's identity change (e.g. someone else votes while you're looking).
-  useEffect(() => {
-    for (const { marker, renderReactions } of Object.values(propertyMarkersRef.current)) {
-      if (renderReactions && marker.getPopup()?.isOpen()) renderReactions();
-    }
-  }, [reactions, myUserId, users, mapLoaded]);
-
-  // Pin styling from group opinion + freshness:
-  //  - objected to by anyone → desaturated
-  //  - loved by someone  → amber ring
-  //  - every household in → amber ring + glow
-  //  - new since last visit → blue halo
-  useEffect(() => {
-    for (const key of Object.keys(propertyMarkersRef.current)) {
-      const { marker, listing } = propertyMarkersRef.current[key];
-      const dot = marker.getElement()?.firstElementChild as HTMLElement | null;
-      if (!dot) continue;
-
-      const rs = listing.id ? reactions.filter(r => r.listing_id === listing.id) : [];
-      const objected = rs.some(r => r.reaction === 'object');
-      const loves = new Set(rs.filter(r => r.reaction === 'love').map(r => r.user_id));
-      // Unanimity is a household question, not a headcount — the parent
-      // computes it from convergence so the map and the dashboard agree.
-      const lovedByAll = listing.id ? (unanimousListingIds?.has(listing.id) ?? false) : false;
-      const isNew = newListingKeys?.has(key) ?? false;
-
-      const approx = listing.location_precision === 'approximate';
-      const baseBorderColor = approx ? (SOURCE_COLORS[listing.source] ?? '#6b7280') : 'white';
-      dot.style.filter = objected ? 'grayscale(0.85)' : '';
-      dot.style.border = loves.size > 0
-        ? `2px ${approx ? 'dashed' : 'solid'} #f59e0b`
-        : `2px ${approx ? 'dashed' : 'solid'} ${baseBorderColor}`;
-
-      const shadows = ['0 1px 3px rgba(0,0,0,0.4)'];
-      if (lovedByAll) shadows.push('0 0 0 4px rgba(245,158,11,0.45)');
-      if (isNew) shadows.push(`0 0 0 ${lovedByAll ? 8 : 4}px rgba(37,99,235,0.35)`);
-      dot.style.boxShadow = shadows.join(', ');
-    }
-  }, [reactions, users, newListingKeys, unanimousListingIds, mapLoaded, properties]);
-
-  // Apply master toggle + filter visibility — runs after creation, and again
-  // whenever any filter changes. Reads always-current state via the ref Map.
-  useEffect(() => {
-    if (!map.current || !mapLoaded) return;
-    for (const key of Object.keys(propertyMarkersRef.current)) {
-      const { marker, listing } = propertyMarkersRef.current[key];
-      const el = marker.getElement();
-      if (!el) continue;
-      // Apply opacity to the inner dot — Mapbox manages the outer element's
-      // opacity for its own terrain-occlusion fade and would override us on
-      // every zoom/pan.
-      const dot = el.firstElementChild as HTMLElement | null;
-      const visible = visibility.properties
-        && passesListingFilters(listing, sourceFilter, priceRange, hideCommercial);
-      if (dot) dot.style.opacity = visible ? '1' : '0';
-      el.style.pointerEvents = visible ? 'auto' : 'none';
-    }
-  }, [visibility.properties, sourceFilter, priceRange, hideCommercial, mapLoaded, properties]);
 
   // Isochrone visibility — toggles per-zone outline layers AND filters the
   // combined fade/outline-dash layer so only the checked zones contribute.

@@ -1,15 +1,60 @@
 import { test, expect } from '@playwright/test';
-import { LISTING_COUNT, ISOCHRONE_FIXTURES, INTERSECTION_FIXTURE, USER_FIXTURES, type Default, type WithZones, type WithUsers } from './Map.story';
+import {
+  LISTING_COUNT,
+  MANY_LISTING_COUNT,
+  ISOCHRONE_FIXTURES,
+  INTERSECTION_FIXTURE,
+  USER_FIXTURES,
+  type Default,
+  type ManyListings,
+  type WithZones,
+  type WithUsers,
+} from './Map.story';
 
-// Minimal shape of the window globals WithZones records — avoids pulling the
+// Listing pins are a clustered GeoJSON layer, so the only real marker DOM
+// nodes on a listings-only story are the ones an interaction opens. Nothing
+// here interacts, so the honest expectation is zero — but the assertion is
+// written against a small constant rather than 0 so it keeps meaning "does
+// not scale with the listing count" once the follow-up unit opens a popup
+// marker on click.
+const MAX_LISTING_DOM_MARKERS = 4;
+
+// Minimal shape of the window globals the stories record — avoids pulling the
 // mapbox-gl types into code that runs inside page.evaluate.
 type GeoJSONSourceLike = { setData: (data: unknown) => void };
+type RenderedFeature = { properties?: Record<string, unknown> | null };
 type MapWindow = typeof globalThis & {
-  __mapForTest?: { getSource: (id: string) => GeoJSONSourceLike | undefined };
+  __mapForTest?: {
+    getSource: (id: string) => GeoJSONSourceLike | undefined;
+    getLayer: (id: string) => unknown;
+    setZoom: (zoom: number) => void;
+    once: (event: string, cb: () => void) => void;
+    queryRenderedFeatures: (options: { layers: string[] }) => RenderedFeature[];
+  };
   __isoSourceBefore?: unknown;
   __intersectionSourceBefore?: unknown;
   __intersectionSetDataCalls?: number;
+  __listingSourceBefore?: unknown;
+  __listingSetDataCalls?: number;
+  __mapIdleCount?: number;
 };
+
+// The stories count 'idle' events off the live map. Waiting for one before
+// counting marker DOM nodes is what makes "there are no per-listing markers"
+// a real assertion rather than one that passes at t=0 because nothing has
+// been drawn yet.
+async function waitForMapIdle(page: import('@playwright/test').Page) {
+  await page.waitForFunction(() => ((window as MapWindow).__mapIdleCount ?? 0) > 0, undefined, {
+    timeout: 15000,
+  });
+}
+
+// Ids of the source and layers Map.tsx renders listings through. Hardcoded
+// here (as 'isochrones-combined' already is below) because they're part of
+// what this spec pins down, not incidental detail.
+const LISTING_SOURCE = 'listings';
+const CLUSTER_LAYER = 'listings-clusters';
+const POINT_LAYER = 'listings-unclustered';
 
 // mapbox-gl is real here (not mocked like the jsdom Map.test.tsx) — the
 // whole point of a browser-based test is to exercise its actual clustering
@@ -18,63 +63,159 @@ type MapWindow = typeof globalThis & {
 // is enough for the library to fire 'load'; everything Map.tsx itself adds
 // on top (markers, isochrone layers) uses inline GeoJSON data, not a URL, so
 // nothing else needs mocking for the map to become interactive.
+// A glyphs protobuf holding a single empty fontstack ("Arial", range
+// "0-255"): `fontstack{ name=1, range=2 }` wrapped in `glyphs{ stacks=1 }`.
+const EMPTY_GLYPH_PBF = Buffer.from([
+  0x0a, 0x0e,
+  0x0a, 0x05, 0x41, 0x72, 0x69, 0x61, 0x6c,
+  0x12, 0x05, 0x30, 0x2d, 0x32, 0x35, 0x35,
+]);
+
 async function mockMapbox(page: import('@playwright/test').Page) {
   await page.route('**/api.mapbox.com/styles/v1/**', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ version: 8, sources: {}, layers: [], glyphs: undefined, sprite: undefined }),
+      body: JSON.stringify({
+        version: 8,
+        sources: {},
+        layers: [],
+        // The cluster-count layer is a symbol layer, and mapbox-gl refuses to
+        // lay out text for a style with no glyphs endpoint. Point it at the
+        // (mocked, below) font endpoint so the layer is valid; the labels
+        // themselves aren't what any test here asserts on.
+        glyphs: 'https://api.mapbox.com/fonts/v1/mapbox/{fontstack}/{range}.pbf',
+        sprite: undefined,
+      }),
     })
+  );
+  // Glyph ranges. This has to be a *valid* glyphs protobuf (one fontstack,
+  // no glyphs in it) rather than an empty body: mapbox-gl fails the whole
+  // tile when glyph parsing throws, which silently takes the circle layers
+  // sharing that tile down with it. The labels themselves don't render — no
+  // test here asserts on them — but every other layer does.
+  await page.route('**/api.mapbox.com/fonts/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-protobuf', body: EMPTY_GLYPH_PBF })
   );
   // Telemetry/analytics — not needed for the map to function, just quieted.
   await page.route('**/events.mapbox.com/**', (route) => route.fulfill({ status: 204, body: '' }));
 }
 
 test.describe('Map story gallery', () => {
-  test('mounts and reaches an idle, loaded state with markers on the map', async ({ page, mount }) => {
+  test('renders listings through a clustered layer, not one DOM marker per listing', async ({ page, mount }) => {
     await mockMapbox(page);
 
-    const component = await mount<typeof Default>('components/Map/Default');
+    // 24 listings first, then 1500 — the point of asserting the same bound
+    // for both is that the DOM-marker count does not track the listing count.
+    const small = await mount<typeof Default>('components/Map/Default');
+    await expect(small.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+    expect(LISTING_COUNT).toBeGreaterThan(MAX_LISTING_DOM_MARKERS);
+    expect(await small.locator('.mapboxgl-marker').count()).toBeLessThanOrEqual(MAX_LISTING_DOM_MARKERS);
 
-    // The map container itself is the outer div Map.tsx renders around the
-    // mapboxgl.Map instance's container ref.
-    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    const many = await mount<typeof ManyListings>('components/Map/ManyListings');
+    await expect(many.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+    expect(await many.locator('.mapboxgl-marker').count()).toBeLessThanOrEqual(MAX_LISTING_DOM_MARKERS);
 
-    // Every listing gets a real marker DOM node today — this assertion is
-    // exactly what #38 should change (to a bounded number regardless of
-    // listing count) once markers become a clustered GeoJSON layer instead.
-    const markers = component.locator('.mapboxgl-marker');
-    await expect(markers).toHaveCount(LISTING_COUNT, { timeout: 15000 });
+    // …and the listings are genuinely on the map rather than simply absent:
+    // the clustered source exists and its layers render features.
+    await page.waitForFunction(
+      ([sourceId, clusterLayer, pointLayer]) => {
+        const map = (window as MapWindow).__mapForTest;
+        if (!map?.getSource(sourceId) || !map.getLayer(clusterLayer)) return false;
+        return map.queryRenderedFeatures({ layers: [clusterLayer, pointLayer] }).length > 0;
+      },
+      [LISTING_SOURCE, CLUSTER_LAYER, POINT_LAYER],
+      { timeout: 15000 }
+    );
   });
 
-  test('an unrelated prop change does not tear down and recreate the markers', async ({ page, mount }) => {
+  test('clusters listings at low zoom and shows them individually at high zoom', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    const component = await mount<typeof ManyListings>('components/Map/ManyListings');
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await page.waitForFunction(
+      (sourceId) => !!(window as MapWindow).__mapForTest?.getSource(sourceId),
+      LISTING_SOURCE,
+      { timeout: 15000 }
+    );
+
+    const counts = await page.evaluate(async ([clusterLayer, pointLayer]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      const countAt = (zoom: number) =>
+        new Promise<{ clusters: number; points: number }>((resolve) => {
+          map.once('idle', () =>
+            resolve({
+              clusters: map.queryRenderedFeatures({ layers: [clusterLayer] }).length,
+              points: map.queryRenderedFeatures({ layers: [pointLayer] }).length,
+            })
+          );
+          map.setZoom(zoom);
+        });
+      // Zoom 4 puts the whole ~1km fixture inside a single pixel; zoom 15 is
+      // past the cluster max zoom and wide enough to hold all of it.
+      const low = await countAt(4);
+      const high = await countAt(15);
+      return { low, high };
+    }, [CLUSTER_LAYER, POINT_LAYER]);
+
+    // Low zoom: everything is aggregated — a handful of clusters standing in
+    // for 1500 listings, and no individual pins.
+    expect(counts.low.points).toBe(0);
+    expect(counts.low.clusters).toBeGreaterThan(0);
+    expect(counts.low.clusters).toBeLessThan(MANY_LISTING_COUNT / 10);
+
+    // High zoom: the clusters have broken up into the individual listings.
+    expect(counts.high.clusters).toBe(0);
+    expect(counts.high.points).toBeGreaterThanOrEqual(MANY_LISTING_COUNT * 0.8);
+  });
+
+  test('an unrelated prop change does not tear down and recreate the listing source', async ({ page, mount }) => {
     await mockMapbox(page);
 
     const component = await mount<typeof Default>('components/Map/Default', { myUserId: 'me' });
-    await expect(component.locator('.mapboxgl-marker')).toHaveCount(LISTING_COUNT, { timeout: 15000 });
-
-    // Tag the live marker nodes so the check below is "these exact nodes
-    // survived", not just "the count still matches" — a naive tear-down and
-    // recreate would still land on the same count with a fresh set of nodes.
-    const idsBefore = await page.evaluate(() => {
-      const nodes = Array.from(document.querySelectorAll('.mapboxgl-marker'));
-      nodes.forEach((el, i) => el.setAttribute('data-test-marker-id', String(i)));
-      return nodes.map((_, i) => String(i));
-    });
-
-    // myUserId is not in Map.tsx's marker-creation effect's dependency list —
-    // who's viewing has nothing to do with which listings exist. update()
-    // re-renders the same mounted story in place (no navigation, no
-    // remount), so this exercises exactly the prop-change path Map.tsx sees
-    // in the real app when a participant is selected/deselected.
-    await component.update({ myUserId: 'someone-else' });
-
-    await expect(component.locator('.mapboxgl-marker')).toHaveCount(LISTING_COUNT, { timeout: 15000 });
-    const idsAfter = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('.mapboxgl-marker')).map((el) => el.getAttribute('data-test-marker-id'))
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await page.waitForFunction(
+      (sourceId) => !!(window as MapWindow).__mapForTest?.getSource(sourceId),
+      LISTING_SOURCE,
+      { timeout: 15000 }
     );
 
-    expect(idsAfter.sort()).toEqual(idsBefore.sort());
+    // The listing pins are canvas-rendered, so there are no DOM nodes to tag
+    // the way the participant-marker test does. Capture the source by
+    // identity instead, and wrap setData to count calls — a filter change is
+    // supposed to re-`setData` the same source, never to replace it, and a
+    // change that touches no filter should do neither.
+    await page.evaluate((sourceId) => {
+      const w = window as MapWindow;
+      const source = w.__mapForTest!.getSource(sourceId)!;
+      w.__listingSourceBefore = source;
+      w.__listingSetDataCalls = 0;
+      const originalSetData = source.setData.bind(source);
+      source.setData = (data: unknown) => {
+        w.__listingSetDataCalls = (w.__listingSetDataCalls ?? 0) + 1;
+        return originalSetData(data);
+      };
+    }, LISTING_SOURCE);
+
+    // myUserId decides whose hide-commercial preference applies; with no
+    // participants it resolves the same either way, so nothing about which
+    // listings are shown changes. update() re-renders the same mounted story
+    // in place (no navigation, no remount), exactly the prop-change path
+    // Map.tsx sees when a participant is selected/deselected.
+    await component.update({ myUserId: 'someone-else' });
+
+    const result = await page.evaluate((sourceId) => {
+      const w = window as MapWindow;
+      return {
+        listingSourceUnchanged: w.__mapForTest!.getSource(sourceId) === w.__listingSourceBefore,
+        listingSetDataCalls: w.__listingSetDataCalls,
+      };
+    }, LISTING_SOURCE);
+
+    expect(result).toEqual({ listingSourceUnchanged: true, listingSetDataCalls: 0 });
   });
 
   test('an unrelated re-render does not tear down and recreate the isochrone/intersection layers', async ({ page, mount }) => {

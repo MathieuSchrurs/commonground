@@ -11,6 +11,18 @@ import type mapboxgl from 'mapbox-gl';
 // isochrones/intersection.
 const EMPTY_USERS: CommuteConstraint[] = [];
 
+// Map's test-only `onMapInstance` hook, wired to the two globals map.spec.ts
+// reads: the live map (for getSource/queryRenderedFeatures, since GL layers
+// aren't DOM nodes a locator can find) and a count of 'idle' events, which is
+// how a test knows the map has finished drawing before asserting on what is
+// — and isn't — on it.
+function recordMapForTest(map: mapboxgl.Map) {
+  const w = window as unknown as { __mapForTest?: mapboxgl.Map; __mapIdleCount?: number };
+  w.__mapForTest = map;
+  w.__mapIdleCount = 0;
+  map.on('idle', () => { w.__mapIdleCount = (w.__mapIdleCount ?? 0) + 1; });
+}
+
 // Listings clustered around Ghent, spread enough to be individually
 // addressable but close enough that a real clustering pass (once #38 lands)
 // would group most of them at low zoom — this story is the fixture for that
@@ -35,13 +47,64 @@ function listing(i: number): PropertyListing {
 
 const properties = Array.from({ length: LISTING_COUNT }, (_, i) => listing(i));
 
+// A search zone routinely holds well over a thousand listings (see
+// src/scraper/db.ts) — this fixture is that scale, so map.spec.ts can assert
+// the DOM-marker count doesn't track the listing count. Laid out as a tight
+// grid (~840m × 890m around Ghent) rather than the wide ring above so the
+// whole set fits the viewport at high zoom: that lets the clustering test
+// compare "one cluster at low zoom" against "every listing individually" at
+// high zoom without listings falling outside the queried viewport.
+export const MANY_LISTING_COUNT = 1500;
+const MANY_COLUMNS = 50;
+const MANY_ROWS = MANY_LISTING_COUNT / MANY_COLUMNS;
+
+function manyListing(i: number): PropertyListing {
+  const column = i % MANY_COLUMNS;
+  const row = Math.floor(i / MANY_COLUMNS);
+  return {
+    id: `many-listing-${i}`,
+    source: 'immoweb',
+    external_id: `many-${i}`,
+    url: `https://example.com/many/${i}`,
+    property_type: 'house',
+    price: 200000 + i * 100,
+    latitude: 51.0543 - 0.004 + (row / (MANY_ROWS - 1)) * 0.008,
+    longitude: 3.7174 - 0.006 + (column / (MANY_COLUMNS - 1)) * 0.012,
+  };
+}
+
+const manyProperties = Array.from({ length: MANY_LISTING_COUNT }, (_, i) => manyListing(i));
+
 // myUserId is a story prop (not hardcoded like the others) specifically so
 // map.spec.ts can exercise component.update({ myUserId }) — changing who's
 // viewing is unrelated to which listings exist, so it's the natural probe
 // for "does an unrelated prop change needlessly rebuild the marker layer".
 export const Default = ({ myUserId = null }: { myUserId?: string | null } = {}) => (
   <div style={{ height: '600px', width: '100%' }}>
-    <Map users={[]} intersection={null} isochrones={[]} properties={properties} myUserId={myUserId} />
+    <Map
+      users={EMPTY_USERS}
+      intersection={null}
+      isochrones={[]}
+      properties={properties}
+      myUserId={myUserId}
+      onMapInstance={recordMapForTest}
+    />
+  </div>
+);
+
+// Same component, at the scale a real search zone reaches. The listing pins
+// are a clustered GeoJSON layer, which is canvas-rendered rather than DOM, so
+// this story records the live map instance the same way WithZones does — the
+// test asserts on queryRenderedFeatures, not on nodes it can select.
+export const ManyListings = () => (
+  <div style={{ height: '600px', width: '100%' }}>
+    <Map
+      users={EMPTY_USERS}
+      intersection={null}
+      isochrones={[]}
+      properties={manyProperties}
+      onMapInstance={recordMapForTest}
+    />
   </div>
 );
 
@@ -97,9 +160,7 @@ export const WithZones = ({
       intersection={intersection}
       isochrones={isochrones}
       properties={[]}
-      onMapInstance={(map) => {
-        (window as unknown as { __mapForTest?: mapboxgl.Map }).__mapForTest = map;
-      }}
+      onMapInstance={recordMapForTest}
     />
   </div>
 );

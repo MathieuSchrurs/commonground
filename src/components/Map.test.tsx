@@ -11,13 +11,24 @@ import { PropertyListing } from '@/scraper/types';
 // within the same render() call, and every method chains via `return this`
 // the way the real mapbox-gl API does.
 //
-// Map.tsx creates each marker's `el` with `document.createElement` and never
-// attaches it to the React-rendered tree — production code hands it to
-// mapbox-gl's real internals instead. `addTo()` is a no-op here, so there's
-// nothing for a DOM query against the render()ed container to find; track
-// created markers directly instead. `properties.forEach` creates them in
-// array order, so `createdMarkers[i]` corresponds to `properties[i]`.
+// Listings are drawn from a clustered GeoJSON source, not from marker DOM
+// nodes, so the source is where this file observes them: `addSource` keeps a
+// fake source per id and `setData` records what Map.tsx last handed it.
+// (Clustering itself is real mapbox-gl behaviour and is covered in the
+// browser by map.spec.ts — there's nothing to fake here.)
+let createdMaps: FakeMap[] = [];
 let createdMarkers: FakeMarker[] = [];
+
+interface ListingFeature {
+  geometry: { type: string; coordinates: [number, number] };
+  properties: Record<string, unknown>;
+}
+
+class FakeGeoJSONSource {
+  data: unknown;
+  constructor(spec: { data?: unknown }) { this.data = spec.data; }
+  setData(data: unknown) { this.data = data; return this; }
+}
 
 class FakeMarker {
   private el: HTMLElement;
@@ -44,17 +55,25 @@ class FakePopup {
 }
 
 class FakeMap {
+  sources: Record<string, FakeGeoJSONSource> = {};
+  constructor() { createdMaps.push(this); }
+  // Layer-scoped listeners (`on('click', layerId, cb)`) pass three arguments;
+  // only the map-level 'load' matters here.
   on(event: string, cb: (e?: unknown) => void) {
     if (event === 'load') cb();
     return this;
   }
   addControl() { return this; }
-  addSource() { return this; }
-  removeSource() { return this; }
+  addSource(id: string, spec: { data?: unknown }) {
+    this.sources[id] = new FakeGeoJSONSource(spec);
+    return this;
+  }
+  removeSource(id: string) { delete this.sources[id]; return this; }
   addLayer() { return this; }
   removeLayer() { return this; }
-  getSource() { return undefined; }
+  getSource(id: string) { return this.sources[id]; }
   getLayer() { return undefined; }
+  getCanvas() { return { style: {} as CSSStyleDeclaration }; }
   setFilter() { return this; }
   setLayoutProperty() { return this; }
   setPaintProperty() { return this; }
@@ -62,6 +81,7 @@ class FakeMap {
   remove() { return this; }
   fitBounds() { return this; }
   flyTo() { return this; }
+  easeTo() { return this; }
   setFog() { return this; }
 }
 
@@ -90,6 +110,7 @@ class FakeResizeObserver {
 let MapComponent: typeof import('./Map').default;
 
 beforeEach(async () => {
+  createdMaps = [];
   createdMarkers = [];
   vi.stubGlobal('ResizeObserver', FakeResizeObserver);
   vi.stubEnv('NEXT_PUBLIC_MAPBOX_PUBLIC_TOKEN', 'test-token');
@@ -131,44 +152,46 @@ function participant(id: string, hideCommercial?: boolean): CommuteConstraint {
   };
 }
 
-// Map.tsx also creates one marker per commuter (a numbered pin at their
-// address), from a separate effect than the property-listing dots. A
-// commuter marker sets its own `el.textContent` (the number badge); a
-// property dot never sets text directly on `el` — only its unlabelled child
-// `dot` div — so `el.textContent === ''` reliably isolates property markers
-// from commuter markers regardless of how many of each exist or which effect
-// ran first.
-function propertyMarkers(): FakeMarker[] {
-  return createdMarkers.filter((m) => m.getElement().textContent === '');
+// The listings the map is currently drawing: the feature collection last
+// handed to the clustered 'listings' source. Filtering happens by feeding the
+// source only the listings that pass — there is no per-listing DOM node left
+// to restyle — so this is where "which listings are on the map" is readable.
+function listingFeatures(): ListingFeature[] {
+  const source = createdMaps.at(-1)?.getSource('listings');
+  const data = source?.data as { features?: ListingFeature[] } | undefined;
+  return data?.features ?? [];
 }
 
-describe('Map — commercial-listing marker visibility', () => {
-  it("fades a commercial listing's marker when the viewer hides commercial listings", () => {
+function listingKeys(): string[] {
+  return listingFeatures().map((f) => f.properties.listingKey as string);
+}
+
+describe('Map — commercial-listing visibility', () => {
+  it('leaves a commercial listing out of the map data when the viewer hides commercial listings', () => {
     const properties = [listing('office-1', 'commercial'), listing('house-1', 'house')];
     const users = [participant('me', true)];
 
     render(<MapComponent users={users} intersection={null} isochrones={[]} properties={properties} myUserId="me" />);
 
-    const [office, house] = propertyMarkers();
-    expect(propertyMarkers()).toHaveLength(2);
-
-    const officeDot = office.getElement().firstElementChild as HTMLElement;
-    const houseDot = house.getElement().firstElementChild as HTMLElement;
-
-    expect(officeDot.style.opacity).toBe('0');
-    expect(houseDot.style.opacity).toBe('1');
+    expect(listingKeys()).toEqual(['immoweb:house-1']);
   });
 
-  it("shows a commercial listing's marker when the viewer has not hidden it", () => {
+  it('includes a commercial listing when the viewer has not hidden it', () => {
     const properties = [listing('office-1', 'commercial')];
     const users = [participant('me', false)];
 
     render(<MapComponent users={users} intersection={null} isochrones={[]} properties={properties} myUserId="me" />);
 
-    const [office] = propertyMarkers();
-    expect(propertyMarkers()).toHaveLength(1);
+    expect(listingKeys()).toEqual(['immoweb:office-1']);
+  });
 
-    const officeDot = office.getElement().firstElementChild as HTMLElement;
-    expect(officeDot.style.opacity).toBe('1');
+  it('renders no marker DOM node for a listing', () => {
+    const properties = [listing('house-1', 'house'), listing('house-2', 'house')];
+
+    render(<MapComponent users={[]} intersection={null} isochrones={[]} properties={properties} />);
+
+    expect(listingKeys()).toEqual(['immoweb:house-1', 'immoweb:house-2']);
+    // No participants either, so every marker created would be a listing's.
+    expect(createdMarkers).toHaveLength(0);
   });
 });
