@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
 import { Feature, Polygon, MultiPolygon } from 'geojson';
 import { Eye, Layers, Loader2 } from 'lucide-react';
 import { CommuteConstraint } from '@/types/user';
