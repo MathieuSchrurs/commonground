@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import Map from './Map';
 import { PropertyListing } from '@/scraper/types';
 import type { CommuteConstraint } from '@/types/user';
@@ -121,11 +121,22 @@ export const ManyListings = () => (
 // left at their defaults, so a click on the popup's love/object button is
 // observable — the story records what it was called with (and the resulting
 // reaction state) into a hidden form, per the "story owns the state" pattern.
-export const WithReactions = ({ myUserId = 'me' }: { myUserId?: string | null } = {}) => {
+// `users` is a story prop (default EMPTY_USERS, like WithZones) so
+// map.spec.ts can probe an open popup's reactor-names note refreshing when a
+// reactor is renamed, not just when reactions themselves change.
+export const WithReactions = ({
+  myUserId = 'me',
+  users = EMPTY_USERS,
+}: { myUserId?: string | null; users?: CommuteConstraint[] } = {}) => {
   const [reactions, setReactions] = useState<ListingReaction[]>([]);
   const [lastToggle, setLastToggle] = useState('');
 
-  const onToggleReaction = (listingId: string, reaction: ReactionKind) => {
+  // useCallback (not a plain closure) so `onToggleReaction`'s identity is
+  // stable across an `update()` that doesn't change `myUserId` — a fresh
+  // function reference every render would itself retrigger any Map.tsx
+  // effect keyed on `onToggleReaction`, masking whether that effect's *other*
+  // dependencies are doing their job.
+  const onToggleReaction = useCallback((listingId: string, reaction: ReactionKind) => {
     setLastToggle(`${listingId}:${reaction}`);
     setReactions(prev => {
       const mine = prev.find(r => r.listing_id === listingId && r.user_id === myUserId);
@@ -139,12 +150,12 @@ export const WithReactions = ({ myUserId = 'me' }: { myUserId?: string | null } 
         { id: `${listingId}-${myUserId}`, session_id: 'story', listing_id: listingId, user_id: myUserId ?? '', reaction },
       ];
     });
-  };
+  }, [myUserId]);
 
   return (
     <div style={{ height: '600px', width: '100%' }}>
       <Map
-        users={EMPTY_USERS}
+        users={users}
         intersection={null}
         isochrones={[]}
         properties={properties}

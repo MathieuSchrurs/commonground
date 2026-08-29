@@ -360,4 +360,54 @@ test.describe('Map story gallery', () => {
     await expect(component.getByTestId('last-toggle-call')).toHaveValue(`${POPUP_TARGET_LISTING.id}:love`);
     await expect(component.getByTestId('my-reaction')).toHaveValue('love');
   });
+
+  test('an open popup refreshes its reactor-names note when a reactor is renamed', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    // myUserId matches PARTICIPANT_FIXTURES[0]'s id, so the love click below
+    // attributes the reaction to a *named* participant — the note this test
+    // watches only renders names, not the un-named 'me' the other popup test
+    // uses.
+    const reactor = PARTICIPANT_FIXTURES[0];
+    const component = await mount<typeof WithReactions>('components/Map/WithReactions', {
+      myUserId: reactor.id,
+      users: PARTICIPANT_FIXTURES,
+    });
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+
+    await page.evaluate(([lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return new Promise<void>((resolve) => {
+        map.once('idle', () => resolve());
+        map.setCenter([lng, lat]);
+        map.setZoom(16);
+      });
+    }, [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    const point = await page.evaluate(([lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return map.project([lng, lat]);
+    }, [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    await component.locator('.mapboxgl-canvas').click({ position: point });
+    const popup = page.locator('.mapboxgl-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+
+    await popup.getByTestId('reaction-love-button').click();
+    await expect(popup).toContainText(reactor.name);
+
+    // update() re-renders the same mounted story with a renamed participant —
+    // same id, new name — without closing the popup. The reactor-names note
+    // should repaint to the new name while the popup stays open, not only
+    // the next time it's reopened.
+    const renamed = { ...reactor, name: 'Renamed' };
+    await component.update({
+      myUserId: reactor.id,
+      users: [renamed, PARTICIPANT_FIXTURES[1]],
+    });
+
+    await expect(popup).toContainText('Renamed');
+    await expect(popup).not.toContainText(reactor.name);
+  });
 });

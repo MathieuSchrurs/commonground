@@ -113,38 +113,83 @@ function formatPrice(price?: number): string {
 // refills, on reaction/identity change) via `renderListingReactions` below.
 // `isNew` travels as a parameter (not read off `listing`) because freshness
 // is a function of `newListingKeys`, computed by the caller from a ref.
+// Small helper so every text-bearing row below is built via `textContent`,
+// never string-interpolated into `innerHTML` — `listing.title`/`address`/
+// `image_url` come from the scraper (external HTML the source site wrote),
+// not from anything this app controls, so they're untrusted strings.
+function textRow(cssText: string, text: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = cssText;
+  el.textContent = text;
+  return el;
+}
+
 function buildListingPopupContent(listing: PropertyListing, isNew: boolean): { root: HTMLDivElement; reactionsEl: HTMLDivElement } {
   const root = document.createElement('div');
   root.className = 'listing-popup';
   root.style.cssText = 'max-width:220px;font-family:sans-serif;';
 
+  if (listing.image_url) {
+    const img = document.createElement('img');
+    // Assigning `.src` treats the value as a URL, not markup — unlike
+    // interpolating it into an `innerHTML` template, this can't inject an
+    // attribute or break out of the tag.
+    img.src = listing.image_url;
+    img.style.cssText = 'width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;';
+    root.appendChild(img);
+  }
+
+  const priceRow = document.createElement('div');
+  priceRow.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:4px;';
+  priceRow.textContent = formatPrice(listing.price);
+
   const dropped = listing.previous_price != null && listing.price != null
     && listing.previous_price !== listing.price;
-  const priceChangeHtml = dropped
-    ? `<span style="color:${listing.price! < listing.previous_price! ? '#16a34a' : '#dc2626'};font-size:11px;font-weight:600;margin-left:6px;">${listing.price! < listing.previous_price! ? '↓' : '↑'} was ${formatPrice(listing.previous_price!)}</span>`
-    : '';
+  if (dropped) {
+    const fell = listing.price! < listing.previous_price!;
+    const change = document.createElement('span');
+    change.style.cssText = `color:${fell ? '#16a34a' : '#dc2626'};font-size:11px;font-weight:600;margin-left:6px;`;
+    change.textContent = `${fell ? '↓' : '↑'} was ${formatPrice(listing.previous_price!)}`;
+    priceRow.appendChild(change);
+  }
+  if (isNew) {
+    const badge = document.createElement('span');
+    badge.style.cssText = 'background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;';
+    badge.textContent = 'NEW';
+    priceRow.appendChild(badge);
+  }
+  root.appendChild(priceRow);
+
   const daysOnMarket = listing.first_seen_at
     ? Math.max(0, Math.floor((Date.now() - Date.parse(listing.first_seen_at)) / 86400000))
     : null;
-  const approximate = listing.location_precision === 'approximate';
+  if (daysOnMarket !== null) {
+    const label = daysOnMarket === 0 ? 'First seen today' : `${daysOnMarket} day${daysOnMarket === 1 ? '' : 's'} on the market`;
+    root.appendChild(textRow('font-size:10px;color:#888;margin-bottom:4px;', label));
+  }
 
-  root.innerHTML = `
-    ${listing.image_url ? `<img src="${listing.image_url}" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;" />` : ''}
-    <div style="font-weight:700;font-size:14px;margin-bottom:4px;">
-      ${formatPrice(listing.price)}
-      ${priceChangeHtml}
-      ${isNew ? '<span style="background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;">NEW</span>' : ''}
-    </div>
-    ${daysOnMarket !== null ? `<div style="font-size:10px;color:#888;margin-bottom:4px;">${daysOnMarket === 0 ? 'First seen today' : `${daysOnMarket} day${daysOnMarket === 1 ? '' : 's'} on the market`}</div>` : ''}
-    ${approximate ? '<div style="font-size:10px;color:#b45309;margin-bottom:4px;">⌖ Approximate location (postcode area) — check the listing for the real address</div>' : ''}
-    ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
-    ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
-    <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
-      ${listing.bedrooms ? `<span>🛏 ${listing.bedrooms}</span>` : ''}
-      ${listing.surface_area ? `<span>📐 ${listing.surface_area} m²</span>` : ''}
-      ${listing.land_area ? `<span>🌿 ${listing.land_area} m²</span>` : ''}
-    </div>
-  `;
+  if (listing.location_precision === 'approximate') {
+    root.appendChild(textRow(
+      'font-size:10px;color:#b45309;margin-bottom:4px;',
+      '⌖ Approximate location (postcode area) — check the listing for the real address'
+    ));
+  }
+
+  if (listing.title) {
+    root.appendChild(textRow('font-size:12px;color:#444;margin-bottom:4px;', listing.title));
+  }
+  if (listing.address) {
+    root.appendChild(textRow('font-size:11px;color:#666;margin-bottom:6px;', `📍 ${listing.address}`));
+  }
+
+  if (listing.bedrooms || listing.surface_area || listing.land_area) {
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;';
+    if (listing.bedrooms) statsRow.appendChild(textRow('', `🛏 ${listing.bedrooms}`));
+    if (listing.surface_area) statsRow.appendChild(textRow('', `📐 ${listing.surface_area} m²`));
+    if (listing.land_area) statsRow.appendChild(textRow('', `🌿 ${listing.land_area} m²`));
+    root.appendChild(statsRow);
+  }
 
   const reactionsEl = document.createElement('div');
   root.appendChild(reactionsEl);
@@ -154,7 +199,7 @@ function buildListingPopupContent(listing: PropertyListing, isNew: boolean): { r
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.textContent = `View on ${listing.source.charAt(0).toUpperCase()}${listing.source.slice(1)}`;
-  link.style.cssText = 'display:block;text-align:center;background:#334155;color:white;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;margin-top:6px;';
+  link.style.cssText = `display:block;text-align:center;background:${SOURCE_COLORS[listing.source] ?? '#334155'};color:white;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;margin-top:6px;`;
   root.appendChild(link);
 
   return { root, reactionsEl };
@@ -448,6 +493,12 @@ export default function Map({
   const usersPositionKey = users.map(u => `${u.longitude},${u.latitude}`).join('|');
   const usersRef = useRef(users);
   usersRef.current = users;
+
+  // Separate content key for names: an open listing popup's reactor-names
+  // note (rendered from `usersRef.current`, below) needs to repaint when a
+  // participant is renamed, even though that's exactly the kind of change
+  // `usersPositionKey` is built to ignore for the intersection effect.
+  const usersNameKey = users.map(u => `${u.id}:${u.name}`).join('|');
 
   const prevCounts = useRef({ users: users.length, isochrones: isochrones.length });
 
@@ -844,15 +895,18 @@ export default function Map({
     }
   }, [mapLoaded]);
 
-  // Keep an open popup's reactions row current: someone else reacting, or the
-  // viewer picking their name, should be reflected without needing to
-  // reopen the popup. Mirrors the old per-marker `renderReactions` effect,
-  // but against the single open popup rather than every marker.
+  // Keep an open popup's reactions row current: someone else reacting, the
+  // viewer picking their name, or a reactor being renamed should all be
+  // reflected without needing to reopen the popup. `usersNameKey` (not
+  // `usersRef.current` alone) is in the dependency array so a rename
+  // actually triggers this — reading a ref's `.current` doesn't. Mirrors the
+  // old per-marker `renderReactions` effect, but against the single open
+  // popup rather than every marker.
   useEffect(() => {
     const open = openListingPopupRef.current;
     if (!open) return;
     renderListingReactions(open.reactionsEl, open.listing.id, reactions, myUserId, onToggleReaction, usersRef.current);
-  }, [reactions, myUserId, onToggleReaction]);
+  }, [reactions, myUserId, onToggleReaction, usersNameKey]);
 
   // Feed the listing source. Filter changes, reactions, unanimity and
   // freshness all land here as new data on the existing source — the source
