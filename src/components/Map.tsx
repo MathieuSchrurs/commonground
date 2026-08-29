@@ -111,23 +111,40 @@ function formatPrice(price?: number): string {
 // is a plain function of a listing rather than a closure over one — the
 // reactions row is a separate, empty container the caller fills in (and
 // refills, on reaction/identity change) via `renderListingReactions` below.
-function buildListingPopupContent(listing: PropertyListing): { root: HTMLDivElement; reactionsEl: HTMLDivElement } {
+// `isNew` travels as a parameter (not read off `listing`) because freshness
+// is a function of `newListingKeys`, computed by the caller from a ref.
+function buildListingPopupContent(listing: PropertyListing, isNew: boolean): { root: HTMLDivElement; reactionsEl: HTMLDivElement } {
   const root = document.createElement('div');
   root.className = 'listing-popup';
   root.style.cssText = 'max-width:220px;font-family:sans-serif;';
 
-  const priceEl = document.createElement('div');
-  priceEl.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:4px;';
-  priceEl.textContent = formatPrice(listing.price);
-  root.appendChild(priceEl);
+  const dropped = listing.previous_price != null && listing.price != null
+    && listing.previous_price !== listing.price;
+  const priceChangeHtml = dropped
+    ? `<span style="color:${listing.price! < listing.previous_price! ? '#16a34a' : '#dc2626'};font-size:11px;font-weight:600;margin-left:6px;">${listing.price! < listing.previous_price! ? '↓' : '↑'} was ${formatPrice(listing.previous_price!)}</span>`
+    : '';
+  const daysOnMarket = listing.first_seen_at
+    ? Math.max(0, Math.floor((Date.now() - Date.parse(listing.first_seen_at)) / 86400000))
+    : null;
+  const approximate = listing.location_precision === 'approximate';
 
-  const subtitle = listing.title || listing.address;
-  if (subtitle) {
-    const subtitleEl = document.createElement('div');
-    subtitleEl.style.cssText = 'font-size:12px;color:#444;margin-bottom:6px;';
-    subtitleEl.textContent = subtitle;
-    root.appendChild(subtitleEl);
-  }
+  root.innerHTML = `
+    ${listing.image_url ? `<img src="${listing.image_url}" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:8px;" />` : ''}
+    <div style="font-weight:700;font-size:14px;margin-bottom:4px;">
+      ${formatPrice(listing.price)}
+      ${priceChangeHtml}
+      ${isNew ? '<span style="background:#2563eb;color:white;font-size:9px;font-weight:700;padding:2px 5px;border-radius:99px;vertical-align:middle;margin-left:6px;">NEW</span>' : ''}
+    </div>
+    ${daysOnMarket !== null ? `<div style="font-size:10px;color:#888;margin-bottom:4px;">${daysOnMarket === 0 ? 'First seen today' : `${daysOnMarket} day${daysOnMarket === 1 ? '' : 's'} on the market`}</div>` : ''}
+    ${approximate ? '<div style="font-size:10px;color:#b45309;margin-bottom:4px;">⌖ Approximate location (postcode area) — check the listing for the real address</div>' : ''}
+    ${listing.title ? `<div style="font-size:12px;color:#444;margin-bottom:4px;">${listing.title}</div>` : ''}
+    ${listing.address ? `<div style="font-size:11px;color:#666;margin-bottom:6px;">📍 ${listing.address}</div>` : ''}
+    <div style="display:flex;gap:8px;font-size:11px;color:#555;margin-bottom:8px;">
+      ${listing.bedrooms ? `<span>🛏 ${listing.bedrooms}</span>` : ''}
+      ${listing.surface_area ? `<span>📐 ${listing.surface_area} m²</span>` : ''}
+      ${listing.land_area ? `<span>🌿 ${listing.land_area} m²</span>` : ''}
+    </div>
+  `;
 
   const reactionsEl = document.createElement('div');
   root.appendChild(reactionsEl);
@@ -147,21 +164,25 @@ function buildListingPopupContent(listing: PropertyListing): { root: HTMLDivElem
 // identity — called once on click and again whenever reactions or the
 // viewer's identity change while the popup is open, replacing the
 // old per-marker `renderReactions` closure now that there's no persistent
-// per-listing DOM node to close over.
+// per-listing DOM node to close over. `users` is for name lookup only (who
+// loved/objected), passed by the caller from a ref so this never needs
+// `users` in an effect's dependency array just to keep names current.
 function renderListingReactions(
   container: HTMLDivElement,
   listingId: string | undefined,
   reactions: ListingReaction[],
   myUserId: string | null,
   onToggleReaction: ((listingId: string, reaction: ReactionKind) => void) | undefined,
+  users: CommuteConstraint[],
 ): void {
   container.innerHTML = '';
   if (!listingId) return; // not yet persisted — nothing to react to
 
   const rs = reactions.filter(r => r.listing_id === listingId);
   const mine = myUserId ? rs.find(r => r.user_id === myUserId)?.reaction : undefined;
-  const loveCount = rs.filter(r => r.reaction === 'love').length;
-  const objectCount = rs.filter(r => r.reaction === 'object').length;
+  const nameOf = new globalThis.Map(users.map(u => [u.id, u.name]));
+  const loveNames = rs.filter(r => r.reaction === 'love').map(r => nameOf.get(r.user_id) ?? '?');
+  const objectNames = rs.filter(r => r.reaction === 'object').map(r => nameOf.get(r.user_id) ?? '?');
 
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:6px;margin:6px 0;';
@@ -181,9 +202,21 @@ function renderListingReactions(
     return btn;
   };
 
-  row.appendChild(makeButton('love', `❤️ Love${loveCount ? ` · ${loveCount}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
-  row.appendChild(makeButton('object', `✕ Object${objectCount ? ` · ${objectCount}` : ''}`, mine === 'object', '#e4e4e7', '#52525b'));
+  row.appendChild(makeButton('love', `❤️ Love${loveNames.length ? ` · ${loveNames.length}` : ''}`, mine === 'love', '#ffe4e6', '#e11d48'));
+  row.appendChild(makeButton('object', `✕ Object${objectNames.length ? ` · ${objectNames.length}` : ''}`, mine === 'object', '#e4e4e7', '#52525b'));
   container.appendChild(row);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:10px;color:#888;margin-bottom:4px;';
+  if (loveNames.length || objectNames.length) {
+    note.textContent = [
+      loveNames.length ? `❤️ ${loveNames.join(', ')}` : '',
+      objectNames.length ? `✕ ${objectNames.join(', ')}` : '',
+    ].filter(Boolean).join('  ·  ');
+  } else if (!myUserId) {
+    note.textContent = 'Pick your name in the sidebar to vote';
+  }
+  if (note.textContent) container.appendChild(note);
 }
 
 // One end of the price-range filter: free-text input that commits a clamped
@@ -246,7 +279,7 @@ export default function Map({
   // array reference, e.g. from a household-pairing field elsewhere) updates
   // existing markers in place instead of tearing down and recreating every
   // marker DOM node.
-  const userMarkersRef = useRef<Record<string, {
+  const participantMarkersRef = useRef<Record<string, {
     marker: mapboxgl.Marker;
     el: HTMLDivElement;
     badge: HTMLDivElement;
@@ -267,6 +300,8 @@ export default function Map({
   useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
   const onToggleReactionRef = useRef(onToggleReaction);
   useEffect(() => { onToggleReactionRef.current = onToggleReaction; }, [onToggleReaction]);
+  const newListingKeysRef = useRef(newListingKeys);
+  useEffect(() => { newListingKeysRef.current = newListingKeys; }, [newListingKeys]);
 
   // A single, reusable popup instance rather than one per listing: there's no
   // per-listing DOM node left to hang a popup off, so it's created lazily on
@@ -403,6 +438,16 @@ export default function Map({
   const intersectionKey = intersection ? JSON.stringify(intersection.geometry.coordinates) : '';
   const intersectionRef = useRef(intersection);
   intersectionRef.current = intersection;
+
+  // Same content-key idiom for `users`: the intersection effect's no-overlap
+  // fallback branch needs participants' current positions to fit the camera,
+  // but must not re-run (and, worse, re-`setData` the intersection source in
+  // the branch above it) just because the parent produced a new-but-equal
+  // `users` reference. Position content, not participant name or anything
+  // else, is what the fallback branch actually reads.
+  const usersPositionKey = users.map(u => `${u.longitude},${u.latitude}`).join('|');
+  const usersRef = useRef(users);
+  usersRef.current = users;
 
   const prevCounts = useRef({ users: users.length, isochrones: isochrones.length });
 
@@ -571,10 +616,10 @@ export default function Map({
 
     const wanted = new Set(users.map(u => u.id));
 
-    for (const id of Object.keys(userMarkersRef.current)) {
+    for (const id of Object.keys(participantMarkersRef.current)) {
       if (!wanted.has(id)) {
-        userMarkersRef.current[id].marker.remove();
-        delete userMarkersRef.current[id];
+        participantMarkersRef.current[id].marker.remove();
+        delete participantMarkersRef.current[id];
       }
     }
 
@@ -583,7 +628,7 @@ export default function Map({
       const transportIcon = user.transportMode === 'driving' ? '🚗' : '🚲';
       const popupHtml = `<strong>${user.name}</strong><br/>${user.address}<br/>Max: ${user.maxMinutes} min<br/>${transportIcon} ${user.transportMode === 'driving' ? 'Car' : 'Bike'}`;
 
-      const existing = userMarkersRef.current[user.id];
+      const existing = participantMarkersRef.current[user.id];
       if (existing) {
         existing.marker.setLngLat([user.longitude, user.latitude]);
         existing.el.style.backgroundColor = color;
@@ -637,7 +682,7 @@ export default function Map({
           .setLngLat([user.longitude, user.latitude])
           .setPopup(popup)
           .addTo(map.current);
-        userMarkersRef.current[user.id] = { marker, el, badge, popup };
+        participantMarkersRef.current[user.id] = { marker, el, badge, popup };
       }
     });
   }, [users, mapLoaded]);
@@ -646,7 +691,7 @@ export default function Map({
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
     users.forEach((user, index) => {
-      const el = userMarkersRef.current[user.id]?.el;
+      const el = participantMarkersRef.current[user.id]?.el;
       if (el) el.style.opacity = visibility.markers[index] ? '1' : '0';
     });
   }, [visibility.markers, users, mapLoaded]);
@@ -770,14 +815,16 @@ export default function Map({
       );
       if (!listing) return;
 
-      const { root, reactionsEl } = buildListingPopupContent(listing);
+      const isNew = newListingKeysRef.current?.has(listingKey) ?? false;
+      const { root, reactionsEl } = buildListingPopupContent(listing, isNew);
       openListingPopupRef.current = { listing, reactionsEl };
       renderListingReactions(
         reactionsEl,
         listing.id,
         reactionsRef.current,
         myUserIdRef.current,
-        onToggleReactionRef.current
+        onToggleReactionRef.current,
+        usersRef.current
       );
 
       if (!listingPopupRef.current) {
@@ -804,7 +851,7 @@ export default function Map({
   useEffect(() => {
     const open = openListingPopupRef.current;
     if (!open) return;
-    renderListingReactions(open.reactionsEl, open.listing.id, reactions, myUserId, onToggleReaction);
+    renderListingReactions(open.reactionsEl, open.listing.id, reactions, myUserId, onToggleReaction, usersRef.current);
   }, [reactions, myUserId, onToggleReaction]);
 
   // Feed the listing source. Filter changes, reactions, unanimity and
@@ -982,12 +1029,13 @@ export default function Map({
     });
     if (map.current.getSource('intersection')) map.current.removeSource('intersection');
 
-    if (users.length > 0) {
+    const currentUsers = usersRef.current;
+    if (currentUsers.length > 0) {
       const bounds = new mapboxgl.LngLatBounds();
-      users.forEach((user) => bounds.extend([user.longitude, user.latitude]));
+      currentUsers.forEach((user) => bounds.extend([user.longitude, user.latitude]));
       map.current.fitBounds(bounds, { padding: 100 });
     }
-  }, [intersectionKey, users, mapLoaded]);
+  }, [intersectionKey, usersPositionKey, mapLoaded]);
 
   if (!mapboxToken) {
     return (

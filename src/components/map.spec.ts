@@ -5,21 +5,19 @@ import {
   POPUP_TARGET_LISTING,
   ISOCHRONE_FIXTURES,
   INTERSECTION_FIXTURE,
-  USER_FIXTURES,
+  PARTICIPANT_FIXTURES,
   type Default,
   type ManyListings,
   type WithReactions,
   type WithZones,
-  type WithUsers,
+  type WithParticipants,
 } from './Map.story';
 
-// Listing pins are a clustered GeoJSON layer, so the only real marker DOM
-// nodes on a listings-only story are the ones an interaction opens. Nothing
-// here interacts, so the honest expectation is zero — but the assertion is
-// written against a small constant rather than 0 so it keeps meaning "does
-// not scale with the listing count" once the follow-up unit opens a popup
-// marker on click.
-const MAX_LISTING_DOM_MARKERS = 4;
+// Listing pins are a clustered GeoJSON layer, and the individual-listing
+// popup opened on click is a `mapboxgl.Popup`, not a `mapboxgl.Marker` — so a
+// listings-only story with nothing clicked has zero real marker DOM nodes,
+// regardless of listing count.
+const MAX_LISTING_DOM_MARKERS = 0;
 
 // Minimal shape of the window globals the stories record — avoids pulling the
 // mapbox-gl types into code that runs inside page.evaluate.
@@ -228,6 +226,7 @@ test.describe('Map story gallery', () => {
     const component = await mount<typeof WithZones>('components/Map/WithZones', {
       isochrones: ISOCHRONE_FIXTURES,
       intersection: INTERSECTION_FIXTURE,
+      users: PARTICIPANT_FIXTURES,
     });
     await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
 
@@ -260,10 +259,14 @@ test.describe('Map story gallery', () => {
 
     // Sending the exact same fixtures through update() still crosses the
     // mount/update page.evaluate boundary, so the browser receives brand new
-    // isochrones/intersection object references with unchanged content —
-    // exactly what an unrelated re-render produces in the real app (e.g.
-    // renaming a participant). Map.tsx should leave the layers alone.
-    await component.update({ isochrones: ISOCHRONE_FIXTURES, intersection: INTERSECTION_FIXTURE });
+    // isochrones/intersection/users object references with unchanged content —
+    // exactly what an unrelated re-render produces in the real app. `users` is
+    // included deliberately: the intersection effect's no-overlap fallback
+    // branch reads `users` for its camera-fit, and a naive fix that keeps
+    // `users` itself in that effect's dependency array would still re-run (and
+    // re-`setData`) on exactly this update even though isochrones/intersection
+    // content is unchanged — this is the shape of "renaming a participant".
+    await component.update({ isochrones: ISOCHRONE_FIXTURES, intersection: INTERSECTION_FIXTURE, users: PARTICIPANT_FIXTURES });
 
     const result = await page.evaluate(() => {
       const w = window as MapWindow;
@@ -284,8 +287,8 @@ test.describe('Map story gallery', () => {
   test('an unrelated re-render does not tear down and recreate participant markers', async ({ page, mount }) => {
     await mockMapbox(page);
 
-    const component = await mount<typeof WithUsers>('components/Map/WithUsers', { users: USER_FIXTURES });
-    await expect(component.locator('.user-marker')).toHaveCount(USER_FIXTURES.length, { timeout: 15000 });
+    const component = await mount<typeof WithParticipants>('components/Map/WithParticipants', { users: PARTICIPANT_FIXTURES });
+    await expect(component.locator('.user-marker')).toHaveCount(PARTICIPANT_FIXTURES.length, { timeout: 15000 });
 
     // Tag the live marker nodes so the check below is "these exact nodes
     // survived", not just "the count still matches" — a naive tear-down and
@@ -303,9 +306,9 @@ test.describe('Map story gallery', () => {
     // field changing, or any other state unrelated to any participant's
     // position/color/transport-mode/name). Map.tsx should leave the existing
     // marker DOM nodes alone.
-    await component.update({ users: USER_FIXTURES });
+    await component.update({ users: PARTICIPANT_FIXTURES });
 
-    await expect(component.locator('.user-marker')).toHaveCount(USER_FIXTURES.length, { timeout: 15000 });
+    await expect(component.locator('.user-marker')).toHaveCount(PARTICIPANT_FIXTURES.length, { timeout: 15000 });
     const idsAfter = await page.evaluate(() =>
       Array.from(document.querySelectorAll('.user-marker')).map((el) => el.getAttribute('data-test-marker-id'))
     );
@@ -342,6 +345,9 @@ test.describe('Map story gallery', () => {
 
     const popup = page.locator('.mapboxgl-popup');
     await expect(popup).toBeVisible({ timeout: 15000 });
+    // Pins that the popup shows the clicked listing's own data, not just that
+    // *a* popup with *some* content appeared.
+    await expect(popup).toContainText(`€${POPUP_TARGET_LISTING.price!.toLocaleString('nl-BE')}`);
     const loveButton = popup.getByTestId('reaction-love-button');
     await expect(loveButton).toBeVisible();
 

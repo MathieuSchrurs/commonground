@@ -204,16 +204,24 @@ export const INTERSECTION_FIXTURE: Feature<Polygon | MultiPolygon> = {
 // story instead records the live mapboxgl.Map instance on `window` via
 // Map's test-only `onMapInstance` hook, so the test can call `getSource(...)`
 // directly and compare object identity across an `update()`.
+// `users` is a story prop (not fixed at EMPTY_USERS like the others) so
+// map.spec.ts can probe the exact shape of the bug this story defends
+// against: renaming a participant re-renders with a new `users` array
+// reference but unchanged isochrones/intersection content — the intersection
+// effect's no-overlap fallback branch reads `users`, so it's easy for that
+// dependency to leak into the branch above it that must not re-`setData`.
 export const WithZones = ({
   isochrones = ISOCHRONE_FIXTURES,
   intersection = INTERSECTION_FIXTURE,
+  users = EMPTY_USERS,
 }: {
   isochrones?: Feature<Polygon | MultiPolygon>[];
   intersection?: Feature<Polygon | MultiPolygon> | null;
+  users?: CommuteConstraint[];
 } = {}) => (
   <div style={{ height: '600px', width: '100%' }}>
     <Map
-      users={EMPTY_USERS}
+      users={users}
       intersection={intersection}
       isochrones={isochrones}
       properties={[]}
@@ -227,9 +235,9 @@ export const WithZones = ({
 // shape the parent produces every render, e.g. via a household-pairing field
 // changing) doesn't tear down and recreate participant markers keyed by
 // identity.
-export const USER_FIXTURES: CommuteConstraint[] = [
+export const PARTICIPANT_FIXTURES: CommuteConstraint[] = [
   {
-    id: 'user-1',
+    id: 'participant-1',
     name: 'Alex',
     address: 'Korenlei 1, Ghent',
     latitude: 51.0543,
@@ -238,7 +246,7 @@ export const USER_FIXTURES: CommuteConstraint[] = [
     transportMode: 'driving',
   },
   {
-    id: 'user-2',
+    id: 'participant-2',
     name: 'Sam',
     address: 'Vrijdagmarkt 1, Ghent',
     latitude: 51.0570,
@@ -248,7 +256,7 @@ export const USER_FIXTURES: CommuteConstraint[] = [
   },
 ];
 
-export const WithUsers = ({ users = USER_FIXTURES }: { users?: CommuteConstraint[] } = {}) => (
+export const WithParticipants = ({ users = PARTICIPANT_FIXTURES }: { users?: CommuteConstraint[] } = {}) => (
   <div style={{ height: '600px', width: '100%' }}>
     <Map users={users} intersection={null} isochrones={[]} properties={[]} />
   </div>
