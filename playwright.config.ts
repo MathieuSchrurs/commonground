@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { GALLERY_URL } from './playwright/gallery-server';
 
 // Component tests only today (see .claude/skills/playwright-component-testing).
 // Stories live beside their component as src/**/*.story.tsx; specs beside
@@ -15,7 +16,7 @@ export default defineConfig({
       name: 'components',
       use: {
         ...devices['Desktop Chrome'],
-        baseURL: 'http://localhost:3100/playwright/gallery/index.html',
+        baseURL: GALLERY_URL,
         serviceWorkers: 'block',
         reuseContext: true,
       },
@@ -23,7 +24,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npx vite --config playwright/vite.config.mts',
-    url: 'http://localhost:3100/playwright/gallery/index.html',
+    url: GALLERY_URL,
     reuseExistingServer: !process.env.CI,
   },
 });

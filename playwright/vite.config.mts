@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { GALLERY_PORT } from './gallery-server';
 
 // Standalone Vite server for the component-testing gallery only — this app
 // is Next.js, which has no dev server suitable for serving a bare gallery
@@ -15,7 +16,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3100,
+    port: GALLERY_PORT,
   },
   define: {
     // Map.tsx reads this directly via process.env at render time; Vite has no

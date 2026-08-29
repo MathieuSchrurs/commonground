@@ -5,8 +5,12 @@ import { PropertyListing } from '@/scraper/types';
 // addressable but close enough that a real clustering pass (once #38 lands)
 // would group most of them at low zoom — this story is the fixture for that
 // story's regression test, not just today's uncapped-markers baseline.
+// Exported so map.spec.ts asserts against this count rather than a second,
+// independently-hardcoded literal that could drift from it.
+export const LISTING_COUNT = 24;
+
 function listing(i: number): PropertyListing {
-  const angle = (i / 24) * Math.PI * 2;
+  const angle = (i / LISTING_COUNT) * Math.PI * 2;
   return {
     id: `listing-${i}`,
     source: 'immoweb',
@@ -19,10 +23,14 @@ function listing(i: number): PropertyListing {
   };
 }
 
-const properties = Array.from({ length: 24 }, (_, i) => listing(i));
+const properties = Array.from({ length: LISTING_COUNT }, (_, i) => listing(i));
 
-export const Default = () => (
+// myUserId is a story prop (not hardcoded like the others) specifically so
+// map.spec.ts can exercise component.update({ myUserId }) — changing who's
+// viewing is unrelated to which listings exist, so it's the natural probe
+// for "does an unrelated prop change needlessly rebuild the marker layer".
+export const Default = ({ myUserId = null }: { myUserId?: string | null } = {}) => (
   <div style={{ height: '600px', width: '100%' }}>
-    <Map users={[]} intersection={null} isochrones={[]} properties={properties} myUserId={null} />
+    <Map users={[]} intersection={null} isochrones={[]} properties={properties} myUserId={myUserId} />
   </div>
 );
