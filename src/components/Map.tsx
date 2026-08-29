@@ -66,12 +66,14 @@ const SOURCE_COLORS: Record<string, string> = {
 // single search zone routinely holds 1000+ listings (src/scraper/db.ts), and
 // a marker per listing means that many DOM nodes re-projected on every pan.
 const LISTINGS_SOURCE = 'listings';
-const LISTINGS_HALO_LAYER = 'listings-halo';
+const LISTINGS_UNANIMOUS_LAYER = 'listings-unanimous';
+const LISTINGS_NEW_LAYER = 'listings-new';
 const LISTINGS_POINT_LAYER = 'listings-unclustered';
 const LISTINGS_CLUSTER_LAYER = 'listings-clusters';
 const LISTINGS_CLUSTER_COUNT_LAYER = 'listings-cluster-count';
 const LISTINGS_LAYERS = [
-  LISTINGS_HALO_LAYER,
+  LISTINGS_UNANIMOUS_LAYER,
+  LISTINGS_NEW_LAYER,
   LISTINGS_POINT_LAYER,
   LISTINGS_CLUSTER_LAYER,
   LISTINGS_CLUSTER_COUNT_LAYER,
@@ -122,6 +124,22 @@ function textRow(cssText: string, text: string): HTMLDivElement {
   el.style.cssText = cssText;
   el.textContent = text;
   return el;
+}
+
+// A participant's own marker popup — same textContent-only discipline as
+// buildListingPopupContent above, and for the same reason: name and address
+// are typed in by whoever added the participant (UserInputForm), so they're
+// just as untrusted as a listing's scraped fields.
+function buildParticipantPopupContent(user: CommuteConstraint): HTMLDivElement {
+  const root = document.createElement('div');
+  root.appendChild(textRow('font-weight:700;', user.name));
+  root.appendChild(textRow('', user.address));
+  const transportIcon = user.transportMode === 'driving' ? '🚗' : '🚲';
+  root.appendChild(textRow(
+    '',
+    `Max: ${user.maxMinutes} min · ${transportIcon} ${user.transportMode === 'driving' ? 'Car' : 'Bike'}`
+  ));
+  return root;
 }
 
 function buildListingPopupContent(listing: PropertyListing, isNew: boolean): { root: HTMLDivElement; reactionsEl: HTMLDivElement } {
@@ -677,7 +695,6 @@ export default function Map({
     users.forEach((user, index) => {
       const color = COLORS[index % COLORS.length];
       const transportIcon = user.transportMode === 'driving' ? '🚗' : '🚲';
-      const popupHtml = `<strong>${user.name}</strong><br/>${user.address}<br/>Max: ${user.maxMinutes} min<br/>${transportIcon} ${user.transportMode === 'driving' ? 'Car' : 'Bike'}`;
 
       const existing = participantMarkersRef.current[user.id];
       if (existing) {
@@ -688,7 +705,7 @@ export default function Map({
         existing.el.textContent = (index + 1).toString();
         existing.el.appendChild(existing.badge);
         existing.badge.textContent = transportIcon;
-        existing.popup.setHTML(popupHtml);
+        existing.popup.setDOMContent(buildParticipantPopupContent(user));
         return;
       }
 
@@ -728,7 +745,7 @@ export default function Map({
       el.appendChild(badge);
 
       if (map.current) {
-        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(popupHtml);
+        const popup = new mapboxgl.Popup({ offset: 25 }).setDOMContent(buildParticipantPopupContent(user));
         const marker = new mapboxgl.Marker(el)
           .setLngLat([user.longitude, user.latitude])
           .setPopup(popup)
@@ -769,18 +786,34 @@ export default function Map({
     const listingsVisibility: 'visible' | 'none' = visibilityRef.current.properties ? 'visible' : 'none';
 
     // Glow behind a listing every household is yes on, halo behind one that's
-    // new since the last visit. A circle layer can't carry the two stacked
-    // box-shadows the old DOM dot did, so they get their own layer beneath.
+    // new since the last visit — two separate layers, not one layer picking
+    // a single color, so a listing that's both new AND unanimous shows both
+    // rings stacked (the new-halo radius grows to sit outside the unanimous
+    // glow instead of being hidden by it), matching the old DOM dot's two
+    // stacked box-shadows.
     m.addLayer({
-      id: LISTINGS_HALO_LAYER,
+      id: LISTINGS_UNANIMOUS_LAYER,
       type: 'circle',
       source: LISTINGS_SOURCE,
       layout: { visibility: listingsVisibility },
-      filter: ['any', ['==', ['get', 'lovedByAll'], true], ['==', ['get', 'isNew'], true]],
+      filter: ['==', ['get', 'lovedByAll'], true],
       paint: {
-        'circle-radius': ['case', ['get', 'lovedByAll'], 13, 11],
-        'circle-color': ['case', ['get', 'lovedByAll'], '#f59e0b', '#2563eb'],
-        'circle-opacity': ['case', ['get', 'lovedByAll'], 0.45, 0.35],
+        'circle-radius': 13,
+        'circle-color': '#f59e0b',
+        'circle-opacity': 0.45,
+      },
+    });
+
+    m.addLayer({
+      id: LISTINGS_NEW_LAYER,
+      type: 'circle',
+      source: LISTINGS_SOURCE,
+      layout: { visibility: listingsVisibility },
+      filter: ['==', ['get', 'isNew'], true],
+      paint: {
+        'circle-radius': ['case', ['get', 'lovedByAll'], 17, 11],
+        'circle-color': '#2563eb',
+        'circle-opacity': 0.35,
       },
     });
 
@@ -970,7 +1003,10 @@ export default function Map({
       map.current.setFilter('isochrones-outline-dash', filterExpr);
       map.current.setLayoutProperty('isochrones-outline-dash', 'visibility', anyVisible ? 'visible' : 'none');
     }
-  }, [visibility.isochrones, mapLoaded, isochrones]);
+    // isochronesKey, not isochrones: same reasoning as the layer-stack effect
+    // below — a fresh-but-equal isochrones array (unrelated re-render) must
+    // not re-run this, only a real geometry change should.
+  }, [visibility.isochrones, mapLoaded, isochronesKey]);
 
   // Intersection visibility
   useEffect(() => {

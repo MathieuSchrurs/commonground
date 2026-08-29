@@ -11,6 +11,7 @@ import {
   type WithReactions,
   type WithZones,
   type WithParticipants,
+  type WithHalos,
 } from './Map.story';
 
 // Listing pins are a clustered GeoJSON layer, and the individual-listing
@@ -57,6 +58,8 @@ async function waitForMapIdle(page: import('@playwright/test').Page) {
 const LISTING_SOURCE = 'listings';
 const CLUSTER_LAYER = 'listings-clusters';
 const POINT_LAYER = 'listings-unclustered';
+const UNANIMOUS_HALO_LAYER = 'listings-unanimous';
+const NEW_HALO_LAYER = 'listings-new';
 
 // mapbox-gl is real here (not mocked like the jsdom Map.test.tsx) — the
 // whole point of a browser-based test is to exercise its actual clustering
@@ -172,6 +175,39 @@ test.describe('Map story gallery', () => {
     // High zoom: the clusters have broken up into the individual listings.
     expect(counts.high.clusters).toBe(0);
     expect(counts.high.points).toBeGreaterThanOrEqual(MANY_LISTING_COUNT * 0.8);
+  });
+
+  test('a listing that is both unanimous and new shows both halo rings, not just one', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    // A single layer choosing one color via a binary `case` expression would
+    // pick unanimous over new (or vice versa) for a listing that's both —
+    // silently dropping one ring. Two separate layers, one per condition, is
+    // what this asserts: both should render for the same feature.
+    const component = await mount<typeof WithHalos>('components/Map/WithHalos', { unanimous: true, isNew: true });
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+
+    const counts = await page.evaluate(([unanimousLayer, newLayer, lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return new Promise<{ unanimous: number; new: number }>((resolve) => {
+        // Center on the target listing, not just zoom in — the source
+        // clusters below zoom 14 (Map.tsx's clusterMaxZoom), and even past
+        // that, queryRenderedFeatures only sees what's actually inside the
+        // current viewport. Same pattern the popup-click test below uses to
+        // reliably land on this exact listing.
+        map.once('idle', () =>
+          resolve({
+            unanimous: map.queryRenderedFeatures({ layers: [unanimousLayer as string] }).length,
+            new: map.queryRenderedFeatures({ layers: [newLayer as string] }).length,
+          })
+        );
+        map.setCenter([lng as number, lat as number]);
+        map.setZoom(16);
+      });
+    }, [UNANIMOUS_HALO_LAYER, NEW_HALO_LAYER, POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    expect(counts).toEqual({ unanimous: 1, new: 1 });
   });
 
   test('an unrelated prop change does not tear down and recreate the listing source', async ({ page, mount }) => {

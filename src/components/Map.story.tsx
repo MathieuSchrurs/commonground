@@ -176,6 +176,34 @@ export const WithReactions = ({
   );
 };
 
+// Map.tsx checks these two sets by different key shapes for the same
+// listing — unanimousListingIds by the listing's own `id`, newListingKeys by
+// `${source}:${external_id}` — easy to conflate, so both are spelled out
+// explicitly rather than derived from one shared constant.
+export const HALO_TARGET_LISTING_ID = POPUP_TARGET_LISTING.id!;
+export const HALO_TARGET_LISTING_KEY = `${POPUP_TARGET_LISTING.source}:${POPUP_TARGET_LISTING.external_id}`;
+
+// Fixture for map.spec.ts's halo test: a story that lets the test mark
+// listing(0) as unanimous, new, or both — the exact case (both at once) that
+// a single binary-choice paint layer would have to pick one of, silently
+// dropping the other ring.
+export const WithHalos = ({
+  unanimous = false,
+  isNew = false,
+}: { unanimous?: boolean; isNew?: boolean } = {}) => (
+  <div style={{ height: '600px', width: '100%' }}>
+    <Map
+      users={EMPTY_USERS}
+      intersection={null}
+      isochrones={[]}
+      properties={properties}
+      unanimousListingIds={unanimous ? new Set([HALO_TARGET_LISTING_ID]) : undefined}
+      newListingKeys={isNew ? new Set([HALO_TARGET_LISTING_KEY]) : undefined}
+      onMapInstance={recordMapForTest}
+    />
+  </div>
+);
+
 // Two commute zones with a genuine overlap, and their overlap as the
 // intersection — fixtures for map.spec.ts's regression test that an
 // unrelated re-render (new-but-content-equal `isochrones`/`intersection`
