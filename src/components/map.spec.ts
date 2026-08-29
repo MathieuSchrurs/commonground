@@ -1,5 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { LISTING_COUNT, type Default } from './Map.story';
+import { LISTING_COUNT, ISOCHRONE_FIXTURES, INTERSECTION_FIXTURE, type Default, type WithZones } from './Map.story';
+
+// Minimal shape of the window globals WithZones records — avoids pulling the
+// mapbox-gl types into code that runs inside page.evaluate.
+type GeoJSONSourceLike = { setData: (data: unknown) => void };
+type MapWindow = typeof globalThis & {
+  __mapForTest?: { getSource: (id: string) => GeoJSONSourceLike | undefined };
+  __isoSourceBefore?: unknown;
+  __intersectionSourceBefore?: unknown;
+  __intersectionSetDataCalls?: number;
+};
 
 // mapbox-gl is real here (not mocked like the jsdom Map.test.tsx) — the
 // whole point of a browser-based test is to exercise its actual clustering
@@ -65,5 +75,64 @@ test.describe('Map story gallery', () => {
     );
 
     expect(idsAfter.sort()).toEqual(idsBefore.sort());
+  });
+
+  test('an unrelated re-render does not tear down and recreate the isochrone/intersection layers', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    const component = await mount<typeof WithZones>('components/Map/WithZones', {
+      isochrones: ISOCHRONE_FIXTURES,
+      intersection: INTERSECTION_FIXTURE,
+    });
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+
+    // Wait for both sources to exist before capturing their identity.
+    await page.waitForFunction(() => {
+      const map = (window as MapWindow).__mapForTest;
+      return !!map?.getSource('isochrones-combined') && !!map?.getSource('intersection');
+    }, { timeout: 15000 });
+
+    // Intersection is created once and then updated in place via `setData` —
+    // its source identity survives a rebuild-avoidance regression either way
+    // (setData never replaces the source object), so identity alone can't
+    // tell a fixed effect from a broken one here. Instead, wrap `setData` to
+    // count calls: the effect re-running on an unrelated update (the bug)
+    // calls it even though the content hasn't changed; skipping the effect
+    // (the fix) doesn't call it at all.
+    await page.evaluate(() => {
+      const w = window as MapWindow;
+      const isoSource = w.__mapForTest!.getSource('isochrones-combined');
+      const intersectionSource = w.__mapForTest!.getSource('intersection')!;
+      w.__isoSourceBefore = isoSource;
+      w.__intersectionSourceBefore = intersectionSource;
+      w.__intersectionSetDataCalls = 0;
+      const originalSetData = intersectionSource.setData.bind(intersectionSource);
+      intersectionSource.setData = (data: unknown) => {
+        w.__intersectionSetDataCalls = (w.__intersectionSetDataCalls ?? 0) + 1;
+        return originalSetData(data);
+      };
+    });
+
+    // Sending the exact same fixtures through update() still crosses the
+    // mount/update page.evaluate boundary, so the browser receives brand new
+    // isochrones/intersection object references with unchanged content —
+    // exactly what an unrelated re-render produces in the real app (e.g.
+    // renaming a participant). Map.tsx should leave the layers alone.
+    await component.update({ isochrones: ISOCHRONE_FIXTURES, intersection: INTERSECTION_FIXTURE });
+
+    const result = await page.evaluate(() => {
+      const w = window as MapWindow;
+      return {
+        isochronesSourceUnchanged: w.__mapForTest!.getSource('isochrones-combined') === w.__isoSourceBefore,
+        intersectionSourceUnchanged: w.__mapForTest!.getSource('intersection') === w.__intersectionSourceBefore,
+        intersectionSetDataCalls: w.__intersectionSetDataCalls,
+      };
+    });
+
+    expect(result).toEqual({
+      isochronesSourceUnchanged: true,
+      intersectionSourceUnchanged: true,
+      intersectionSetDataCalls: 0,
+    });
   });
 });

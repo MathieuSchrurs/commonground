@@ -29,6 +29,10 @@ interface MapProps {
   /** ids of listings every household is yes on — computed from convergence, so
    *  a couple's two hearts count once rather than twice */
   unanimousListingIds?: Set<string>;
+  /** test-only hook: called once with the live mapboxgl.Map instance after
+   *  'load', so component tests can assert on layer/source identity across
+   *  prop updates without instrumenting Map.tsx further */
+  onMapInstance?: (map: mapboxgl.Map) => void;
 }
 
 interface LayerVisibility {
@@ -109,6 +113,7 @@ export default function Map({
   onToggleReaction,
   newListingKeys,
   unanimousListingIds,
+  onMapInstance,
 }: MapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
@@ -140,6 +145,8 @@ export default function Map({
   useEffect(() => { onToggleReactionRef.current = onToggleReaction; }, [onToggleReaction]);
   const usersForNamesRef = useRef(users);
   useEffect(() => { usersForNamesRef.current = users; }, [users]);
+  const onMapInstanceRef = useRef(onMapInstance);
+  useEffect(() => { onMapInstanceRef.current = onMapInstance; }, [onMapInstance]);
 
   // Filters applied to property pins
   const [sourceFilter, setSourceFilter] = useState<Record<string, boolean>>({
@@ -210,6 +217,22 @@ export default function Map({
   // would tear down and rebuild every isochrone layer on each checkbox toggle.
   const visibilityRef = useRef(visibility);
   visibilityRef.current = visibility;
+
+  // Content-based keys for the isochrone/intersection layer effects below,
+  // built the same way as `boundsKey` above: from the VALUES inside each
+  // feature's geometry, not the array/object reference. The parent recomputes
+  // `isochrones`/`intersection` on every render (even for unrelated state,
+  // e.g. renaming a participant), producing new-but-structurally-equal
+  // objects — depending on the raw prop would tear down and rebuild the
+  // whole ~22-layer isochrone stack, or re-`setData` the intersection source,
+  // on every such render. The effects read the current values via these refs
+  // instead of taking the objects as dependencies.
+  const isochronesKey = isochrones.map(iso => JSON.stringify(iso.geometry.coordinates)).join('|');
+  const isochronesRef = useRef(isochrones);
+  isochronesRef.current = isochrones;
+  const intersectionKey = intersection ? JSON.stringify(intersection.geometry.coordinates) : '';
+  const intersectionRef = useRef(intersection);
+  intersectionRef.current = intersection;
 
   // Always-current filter state so the marker-creation effect can apply the
   // right opacity on new pins without listing filters in its deps (which
@@ -313,6 +336,7 @@ export default function Map({
 
     map.current.on('load', () => {
       setMapLoaded(true);
+      onMapInstanceRef.current?.(map.current!);
     });
 
     map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
@@ -723,6 +747,8 @@ export default function Map({
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
+    const isochrones = isochronesRef.current;
+
     const isochroneSources = Array.from({ length: 10 }, (_, i) => `isochrone-${i}`);
     isochroneSources.forEach(sourceId => {
       if (map.current?.getLayer(`${sourceId}-fill`)) map.current.removeLayer(`${sourceId}-fill`);
@@ -772,7 +798,7 @@ export default function Map({
       map.current?.setFilter('isochrones-fade', combinedFilter);
       map.current?.setFilter('isochrones-outline-dash', combinedFilter);
     }
-  }, [isochrones, mapLoaded]);
+  }, [isochronesKey, mapLoaded]);
 
   // Intersection layers — create once (fitting the camera), then update the
   // source data in place so the green zone morphs smoothly when the search
@@ -780,6 +806,7 @@ export default function Map({
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
+    const intersection = intersectionRef.current;
     const hasSource = !!map.current.getSource('intersection');
 
     if (intersection) {
@@ -819,7 +846,7 @@ export default function Map({
       users.forEach((user) => bounds.extend([user.longitude, user.latitude]));
       map.current.fitBounds(bounds, { padding: 100 });
     }
-  }, [intersection, users, mapLoaded]);
+  }, [intersectionKey, users, mapLoaded]);
 
   if (!mapboxToken) {
     return (
