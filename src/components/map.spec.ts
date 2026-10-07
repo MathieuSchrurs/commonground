@@ -30,6 +30,7 @@ type MapWindow = typeof globalThis & {
     getLayer: (id: string) => unknown;
     setZoom: (zoom: number) => void;
     setCenter: (center: [number, number]) => void;
+    panBy: (offset: [number, number], options?: { animate?: boolean }) => void;
     project: (lngLat: [number, number]) => { x: number; y: number };
     once: (event: string, cb: () => void) => void;
     queryRenderedFeatures: (options: { layers: string[] }) => RenderedFeature[];
@@ -395,6 +396,78 @@ test.describe('Map story gallery', () => {
 
     await expect(component.getByTestId('last-toggle-call')).toHaveValue(`${POPUP_TARGET_LISTING.id}:love`);
     await expect(component.getByTestId('my-reaction')).toHaveValue('love');
+  });
+
+  test('a popup opened beside the Layers panel stays clickable rather than sitting under it', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    const component = await mount<typeof WithReactions>('components/Map/WithReactions', { myUserId: 'me' });
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+
+    // The Layers panel is open by default.
+    const panel = component.getByRole('heading', { name: 'Layers' }).locator('xpath=ancestor::div[contains(@class, "z-10")][1]');
+    await expect(panel).toBeVisible();
+    const panelBox = (await panel.boundingBox())!;
+    const canvasBox = (await component.locator('.mapboxgl-canvas').boundingBox())!;
+
+    await page.evaluate(([lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return new Promise<void>((resolve) => {
+        map.once('idle', () => resolve());
+        map.setCenter([lng, lat]);
+        map.setZoom(16);
+      });
+    }, [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    // Pan so the pin sits just right of the panel's right edge: the popup is
+    // centred on the pin, so its left half then extends under the panel.
+    const targetX = panelBox.x + panelBox.width - canvasBox.x + 25;
+    await page.evaluate(
+      ([lng, lat, x]) => {
+        const map = (window as MapWindow).__mapForTest!;
+        const current = map.project([lng, lat]);
+        return new Promise<void>((resolve) => {
+          map.once('idle', () => resolve());
+          map.panBy([current.x - x, 0], { animate: false });
+        });
+      },
+      [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!, targetX],
+    );
+
+    const point = await page.evaluate(([lng, lat]) => {
+      const map = (window as MapWindow).__mapForTest!;
+      return map.project([lng, lat]);
+    }, [POPUP_TARGET_LISTING.longitude!, POPUP_TARGET_LISTING.latitude!]);
+
+    await component.locator('.mapboxgl-canvas').click({ position: point });
+
+    const popup = page.locator('.mapboxgl-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+
+    // The popup must genuinely overlap the panel, or this test proves nothing.
+    const popupBox = (await popup.locator('.mapboxgl-popup-content').boundingBox())!;
+    expect(popupBox.x).toBeLessThan(panelBox.x + panelBox.width);
+
+    const controls = [
+      popup.getByTestId('reaction-love-button'),
+      popup.getByTestId('reaction-object-button'),
+      popup.getByRole('link', { name: /View on/ }),
+    ];
+    for (const control of controls) {
+      await expect(control).toBeVisible();
+      // What the pointer would actually hit at the control's centre.
+      const hit = await control.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return top !== null && el.contains(top);
+      });
+      expect(hit).toBe(true);
+    }
+
+    await expect(component.getByTestId('last-toggle-call')).toHaveValue('');
+    await popup.getByTestId('reaction-love-button').click({ timeout: 5000 });
+    await expect(component.getByTestId('last-toggle-call')).toHaveValue(`${POPUP_TARGET_LISTING.id}:love`);
   });
 
   test('an open popup refreshes its reactor-names note when a reactor is renamed', async ({ page, mount }) => {

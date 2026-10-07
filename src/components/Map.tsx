@@ -1136,7 +1136,7 @@ export default function Map({
   }
 
   return (
-    <div className="relative w-full h-full min-h-[500px] overflow-hidden">
+    <div className="relative w-full h-full min-h-[500px] overflow-hidden [&_.mapboxgl-popup]:z-[15]">
       <div ref={mapContainer} className="w-full h-full" />
 
       <Button
