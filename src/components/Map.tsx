@@ -1136,6 +1136,9 @@ export default function Map({
   }
 
   return (
+    // Popups (listing and participant) sit above the Layers panel (z-10) so a
+    // popup that opens partly beneath it stays clickable, but below the
+    // collapse button (z-20).
     <div className="relative w-full h-full min-h-[500px] overflow-hidden [&_.mapboxgl-popup]:z-[15]">
       <div ref={mapContainer} className="w-full h-full" />
 

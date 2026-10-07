@@ -449,6 +449,11 @@ test.describe('Map story gallery', () => {
     const popupBox = (await popup.locator('.mapboxgl-popup-content').boundingBox())!;
     expect(popupBox.x).toBeLessThan(panelBox.x + panelBox.width);
 
+    // Love is the left-hand button, so it must sit inside the panel's
+    // footprint; otherwise the hit-tests below would pass without the fix.
+    const loveBox = (await popup.getByTestId('reaction-love-button').boundingBox())!;
+    expect(loveBox.x + loveBox.width / 2).toBeLessThan(panelBox.x + panelBox.width);
+
     const controls = [
       popup.getByTestId('reaction-love-button'),
       popup.getByTestId('reaction-object-button'),
