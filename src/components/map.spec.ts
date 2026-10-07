@@ -406,7 +406,7 @@ test.describe('Map story gallery', () => {
     await waitForMapIdle(page);
 
     // The Layers panel is open by default.
-    const panel = component.getByRole('heading', { name: 'Layers' }).locator('xpath=ancestor::div[contains(@class, "z-10")][1]');
+    const panel = component.getByTestId('layers-panel');
     await expect(panel).toBeVisible();
     const panelBox = (await panel.boundingBox())!;
     const canvasBox = (await component.locator('.mapboxgl-canvas').boundingBox())!;
@@ -473,6 +473,60 @@ test.describe('Map story gallery', () => {
     await expect(component.getByTestId('last-toggle-call')).toHaveValue('');
     await popup.getByTestId('reaction-love-button').click({ timeout: 5000 });
     await expect(component.getByTestId('last-toggle-call')).toHaveValue(`${POPUP_TARGET_LISTING.id}:love`);
+  });
+
+  test('a participant popup opened beside the Layers panel is not covered by it either', async ({ page, mount }) => {
+    await mockMapbox(page);
+
+    // Participant pins are DOM markers with their own mapboxgl.Popup, a
+    // different code path from the listing popup above, so the stacking rule
+    // is checked on it directly rather than assumed to carry over.
+    const participant = PARTICIPANT_FIXTURES[0];
+    const component = await mount<typeof WithParticipants>('components/Map/WithParticipants');
+    await expect(component.locator('.mapboxgl-canvas')).toBeVisible({ timeout: 15000 });
+    await waitForMapIdle(page);
+
+    const panelBox = (await component.getByTestId('layers-panel').boundingBox())!;
+    const canvasBox = (await component.locator('.mapboxgl-canvas').boundingBox())!;
+
+    // Put the participant's pin just right of the panel, so its popup (centred
+    // above the pin) extends under the panel.
+    const targetX = panelBox.x + panelBox.width - canvasBox.x + 25;
+    await page.evaluate(
+      ([lng, lat, x]) => {
+        const map = (window as MapWindow).__mapForTest!;
+        const current = map.project([lng, lat]);
+        return new Promise<void>((resolve) => {
+          map.once('idle', () => resolve());
+          map.panBy([current.x - x, 0], { animate: false });
+        });
+      },
+      [participant.longitude, participant.latitude, targetX],
+    );
+
+    await component.locator('#marker-0').click();
+
+    const popup = page.locator('.mapboxgl-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+    await expect(popup).toContainText(participant.name);
+
+    // A point inside the popup's content that is also inside the panel's
+    // footprint, both horizontally and vertically — otherwise this proves
+    // nothing. Whatever the pointer would hit there must be the popup.
+    const popupBox = (await popup.locator('.mapboxgl-popup-content').boundingBox())!;
+    const probe = {
+      x: Math.min(panelBox.x + panelBox.width - 10, popupBox.x + popupBox.width - 1),
+      y: popupBox.y + popupBox.height / 2,
+    };
+    expect(popupBox.x).toBeLessThan(panelBox.x + panelBox.width - 10);
+    expect(probe.y).toBeGreaterThan(panelBox.y);
+    expect(probe.y).toBeLessThan(panelBox.y + panelBox.height);
+
+    const hit = await popup.evaluate((el, p) => {
+      const top = document.elementFromPoint(p.x, p.y);
+      return top !== null && el.contains(top);
+    }, probe);
+    expect(hit).toBe(true);
   });
 
   test('an open popup refreshes its reactor-names note when a reactor is renamed', async ({ page, mount }) => {
