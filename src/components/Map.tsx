@@ -1136,7 +1136,10 @@ export default function Map({
   }
 
   return (
-    <div className="relative w-full h-full min-h-[500px] overflow-hidden">
+    // Popups (listing and participant) sit above the Layers panel (z-10) so a
+    // popup that opens partly beneath it stays clickable, but below the
+    // collapse button (z-20).
+    <div className="relative w-full h-full min-h-[500px] overflow-hidden [&_.mapboxgl-popup]:z-[15]">
       <div ref={mapContainer} className="w-full h-full" />
 
       <Button
@@ -1150,7 +1153,7 @@ export default function Map({
       </Button>
 
       {panelExpanded && (
-        <div className="absolute top-3 left-16 z-10 w-64 max-h-[calc(100%-1.5rem)] overflow-y-auto space-y-2">
+        <div data-testid="layers-panel" className="absolute top-3 left-16 z-10 w-64 max-h-[calc(100%-1.5rem)] overflow-y-auto space-y-2">
           <div className="rounded-lg border border-border bg-background/95 backdrop-blur shadow-md p-3">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold tracking-tight">Layers</h2>

@@ -297,6 +297,6 @@ export const PARTICIPANT_FIXTURES: CommuteConstraint[] = [
 
 export const WithParticipants = ({ users = PARTICIPANT_FIXTURES }: { users?: CommuteConstraint[] } = {}) => (
   <div style={{ height: '600px', width: '100%' }}>
-    <Map users={users} intersection={null} isochrones={[]} properties={[]} />
+    <Map users={users} intersection={null} isochrones={[]} properties={[]} onMapInstance={recordMapForTest} />
   </div>
 );
